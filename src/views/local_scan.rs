@@ -71,13 +71,12 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 }
             }
 
-            if ui.accent_button("📂 选择其他自定义目录").clicked() {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+            if ui.accent_button("📂 选择其他自定义目录").clicked()
+                && let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     state.selected_local_dir = Some(folder.clone());
                     state.local_items = LocalScanner::scan_homeworks(&folder);
                     state.notification = Some((format!("已扫描自定义目录，发现 {} 份作业", state.local_items.len()), InfoBarKind::Success));
                 }
-            }
         });
     });
 

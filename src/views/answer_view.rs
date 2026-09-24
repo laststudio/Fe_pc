@@ -60,9 +60,9 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 }
             }
 
-            if ui.button("💾 导出为 TXT").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(&format!("{}_答案.txt", hw.name))
+            if ui.button("💾 导出为 TXT").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(format!("{}_答案.txt", hw.name))
                     .add_filter("文本文件", &["txt"])
                     .save_file()
                 {
@@ -71,11 +71,10 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         state.notification = Some((format!("已成功导出至: {:?}", path), InfoBarKind::Success));
                     }
                 }
-            }
 
-            if ui.button("📝 导出 Markdown").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(&format!("{}_答案.md", hw.name))
+            if ui.button("📝 导出 Markdown").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(format!("{}_答案.md", hw.name))
                     .add_filter("Markdown 文件", &["md"])
                     .save_file()
                 {
@@ -84,7 +83,6 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         state.notification = Some((format!("已成功导出至: {:?}", path), InfoBarKind::Success));
                     }
                 }
-            }
 
             if ui.button("🚀 以此卷发起自动做题").clicked() {
                 state.auto_selected_hw_id = Some(hw.id.clone());
@@ -112,7 +110,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         }
         AnswerViewMode::Detailed => {
             for section in &hw.sections {
-                ui.heading(&format!("📌 {}", section.title));
+                ui.heading(format!("📌 {}", section.title));
                 ui.add_space(4.0);
 
                 for q in &section.questions {
@@ -194,21 +192,18 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         ui.add_space(6.0);
                         ui.row(|ui| {
                             let copy_label = if q.answers.len() > 1 { "复制首选答案" } else { "复制本题答案" };
-                            if ui.subtle_button(copy_label).clicked() {
-                                if let Some(ans) = q.answers.first() {
-                                    if Exporter::copy_text_to_clipboard(ans).is_ok() {
+                            if ui.subtle_button(copy_label).clicked()
+                                && let Some(ans) = q.answers.first()
+                                    && Exporter::copy_text_to_clipboard(ans).is_ok() {
                                         state.notification = Some(("已复制首选答案到剪贴板！".to_string(), InfoBarKind::Success));
                                     }
-                                }
-                            }
-                            if q.answers.len() > 1 {
-                                if ui.subtle_button(format!("复制全部 {} 种表述", q.answers.len())).clicked() {
+                            if q.answers.len() > 1
+                                && ui.subtle_button(format!("复制全部 {} 种表述", q.answers.len())).clicked() {
                                     let text = q.answers.join("\n");
                                     if Exporter::copy_text_to_clipboard(&text).is_ok() {
                                         state.notification = Some(("已复制全部备选表述到剪贴板！".to_string(), InfoBarKind::Success));
                                     }
                                 }
-                            }
                         });
                     });
                     ui.add_space(6.0);

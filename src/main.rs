@@ -31,11 +31,11 @@ unsafe extern "system" fn win7_delay_hook(
         if !sz_dll.is_null() {
             let name = unsafe { std::ffi::CStr::from_ptr(sz_dll) }.to_string_lossy();
             if name.eq_ignore_ascii_case("combase.dll") {
-                let h = unsafe { LoadLibraryA(b"combase.dll\0".as_ptr() as *const _) };
+                let h = unsafe { LoadLibraryA(c"combase.dll".as_ptr() as *const _) };
                 if !h.is_null() {
                     return h;
                 }
-                return unsafe { LoadLibraryA(b"ole32.dll\0".as_ptr() as *const _) };
+                return unsafe { LoadLibraryA(c"ole32.dll".as_ptr() as *const _) };
             }
         }
     }
@@ -48,6 +48,8 @@ pub static mut __pfnDliNotifyHook2: unsafe extern "system" fn(u32, *const DelayL
 
 
 fn main() -> eframe::Result {
+    fepc::workflow::tts::ensure_crypto_provider();
+
     let config = ThemeConfig::new(FluentTheme::Dark)
         .with_animations(true)
         .with_material_opacity(1.0);
@@ -66,15 +68,6 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             fluent_egui::winui::install(&cc.egui_ctx, config);
-
-            // 补充中文字体到 Monospace 字体族，彻底杜绝终端控制台中的汉字变为方块 □
-            let mut fonts = cc.egui_ctx.fonts(|f| f.definitions().clone());
-            fonts
-                .families
-                .entry(eframe::egui::FontFamily::Monospace)
-                .or_default()
-                .push("Microsoft YaHei".into());
-            cc.egui_ctx.set_fonts(fonts);
 
             Ok(Box::new(FepcApp::new(cc)))
         }),

@@ -1,6 +1,6 @@
 [package]
 name = "fepc"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2024"
 authors = ["code-leitianshuo (leitianshuo1337)"]
 publish = false
@@ -21,8 +21,13 @@ rfd = "0.15"
 arboard = "3.6"
 open = "5.3"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Registry"] }
+msedge-tts = "0.4.0"
+uuid = { version = "1.26.1", features = ["v4"] }
+sha2 = "0.10"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

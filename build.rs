@@ -5,7 +5,8 @@ fn main() {
     println!("cargo:rustc-link-arg={}", obj_path);
     println!("cargo:rustc-link-arg=/SUBSYSTEM:WINDOWS,6.0");
     println!("cargo:rustc-link-arg=/ENTRY:mainCRTStartup");
-    println!("cargo:rustc-link-arg=/DELAYLOAD:combase.dll");
+    println!("cargo:rustc-link-search=native={}\\lib", manifest_dir);
+    println!("cargo:rustc-link-lib=dylib=SecureEngineSDK64");
     println!("cargo:rustc-link-lib=delayimp");
 
     let mut res = winres::WindowsResource::new();
@@ -14,6 +15,8 @@ fn main() {
     res.set("ProductName", "Fe PC");
     res.set("OriginalFilename", "fepc.exe");
     res.set("LegalCopyright", "Copyright (C) 2026 code-leitianshuo(leitianshuo1337)");
+    res.set("ProductVersion", "v0.1.4");
+    res.set("FileVersion", "0.1.4.0");
     if let Err(e) = res.compile() {
         eprintln!("Warning: Failed to compile Windows resource: {}", e);
     }

@@ -16,15 +16,15 @@ impl Exporter {
 
     pub fn format_full_answers(homework: &HomeworkItem) -> String {
         let mut s = String::new();
-        s.push_str(&format!("========================================\n"));
+        s.push_str("========================================\n");
         s.push_str(&format!("试卷名称: {}\n", homework.name));
         s.push_str(&format!("题目数量: {} 题 | 总分: {} 分\n", homework.total_questions(), homework.total_point));
-        s.push_str(&format!("生成工具: Fe PC (Fuck ets100 Desktop)\n"));
-        s.push_str(&format!("========================================\n\n"));
+        s.push_str("生成工具: Fe PC\n");
+        s.push_str("========================================\n\n");
 
         for section in &homework.sections {
             s.push_str(&format!("【{}】(共 {} 题)\n", section.title, section.questions.len()));
-            s.push_str(&format!("----------------------------------------\n"));
+            s.push_str("----------------------------------------\n");
 
             for q in &section.questions {
                 let no_str = if q.number.is_empty() {
@@ -53,9 +53,9 @@ impl Exporter {
                     s.push_str(&format!("关键要点: {}\n", q.important_points.join(", ")));
                 }
 
-                s.push_str("\n");
+                s.push('\n');
             }
-            s.push_str("\n");
+            s.push('\n');
         }
 
         s
@@ -98,7 +98,7 @@ impl Exporter {
                     for opt in &q.options {
                         s.push_str(&format!("- **{}**. {}\n", opt.label, opt.text));
                     }
-                    s.push_str("\n");
+                    s.push('\n');
                 }
 
                 if !q.answers.is_empty() {

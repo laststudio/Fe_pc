@@ -38,82 +38,83 @@ impl LocalScanner {
     }
 
     /// 从指定的本地 ETS 目录中解析 userinfo 保存的账号信息
+    #[inline(never)]
     pub fn read_local_accounts(ets_dir: &Path) -> Vec<LocalAccountInfo> {
         let mut accounts = Vec::new();
         let userinfo_path = ets_dir.join("userinfo");
-        if userinfo_path.exists() {
-            if let Ok(b64) = fs::read_to_string(&userinfo_path) {
-                if let Ok(bytes) = BASE64.decode(b64.trim()) {
-                    // ETS PC 客户端以 GBK/CP936 编码写入 userinfo，直接按 UTF-8 解码会导致中文学生姓名乱码
-                    let (cow, _, _) = encoding_rs::GBK.decode(&bytes);
-                    let json_str = cow.as_ref();
-                    if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json_str) {
-                        for item in items {
-                            let account = item.get("Account").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let token = item.get("Token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let cur_res_id = item.get("CurResItemID").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            if !account.is_empty() {
-                                accounts.push(LocalAccountInfo {
-                                    account,
-                                    name,
-                                    token,
-                                    cur_res_id,
-                                });
-                            }
+        let b64 = match fs::read_to_string(&userinfo_path) {
+            Ok(s) => s,
+            Err(_) => return accounts,
+        };
+
+        crate::themida_tiger_white!({
+            if let Ok(bytes) = BASE64.decode(b64.trim()) {
+                // ETS PC 客户端以 GBK/CP936 编码写入 userinfo，直接按 UTF-8 解码会导致中文学生姓名乱码
+                let (cow, _, _) = encoding_rs::GBK.decode(&bytes);
+                let json_str = cow.as_ref();
+                if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json_str) {
+                    for item in items {
+                        let account = item.get("Account").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let token = item.get("Token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let cur_res_id = item.get("CurResItemID").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        if !account.is_empty() {
+                            accounts.push(LocalAccountInfo {
+                                account,
+                                name,
+                                token,
+                                cur_res_id,
+                            });
                         }
                     }
                 }
             }
-        }
+        });
         accounts
     }
 
     /// 从指定的本地 ETS 目录中解析设备码 ProductID
+    #[inline(never)]
     pub fn read_local_device_code(ets_dir: &Path) -> Option<String> {
         let config_path = ets_dir.join("configinfo");
-        if config_path.exists() {
-            if let Ok(b64) = fs::read_to_string(&config_path) {
-                if let Ok(bytes) = BASE64.decode(b64.trim()) {
-                    if let Ok(Value::Array(entries)) = serde_json::from_slice::<Value>(&bytes) {
-                        for entry in entries {
-                            let entry_name = entry.get("Entry").and_then(|v| v.as_str()).unwrap_or("");
-                            if entry_name == "ProductID" {
-                                if let Some(val) = entry.get("Value").and_then(|v| v.as_str()) {
-                                    if !val.is_empty() {
-                                        return Some(val.to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
+        let b64 = fs::read_to_string(&config_path).ok()?;
+        let bytes = BASE64.decode(b64.trim()).ok()?;
+        let entries: Vec<Value> = serde_json::from_slice(&bytes).ok()?;
+
+        let mut product_id = None;
+        crate::themida_tiger_white!({
+            for entry in &entries {
+                let entry_name = entry.get("Entry").and_then(|v| v.as_str()).unwrap_or("");
+                if entry_name == "ProductID"
+                    && let Some(val) = entry.get("Value").and_then(|v| v.as_str())
+                    && !val.is_empty()
+                {
+                    product_id = Some(val.to_string());
+                    break;
                 }
             }
-        }
-        None
+        });
+        product_id
     }
 
     /// 扫描 ETS 目录中所有作业文件夹并调用 resolver 引擎解析
     pub fn scan_homeworks(ets_dir: &Path) -> Vec<HomeworkItem> {
         let mut homeworks = Vec::new();
-        let entries = match fs::read_dir(ets_dir) {
-            Ok(e) => e,
-            Err(_) => return homeworks,
-        };
+        if let Ok(entries) = fs::read_dir(ets_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                // 过滤已知非作业目录
+                if name == "common" || name == "system" || name.starts_with('.') {
+                    continue;
+                }
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            // 过滤已知非作业目录
-            if name == "common" || name == "system" || name.starts_with('.') {
-                continue;
-            }
-
-            if let Some(hw) = Self::parse_homework_folder(&path) {
-                homeworks.push(hw);
+                if let Some(hw) = Self::parse_homework_folder(&path) {
+                    homeworks.push(hw);
+                }
             }
         }
 
@@ -139,14 +140,13 @@ impl LocalScanner {
                 let sub_path = entry.path();
                 if sub_path.is_dir() && sub_path.file_name().unwrap_or_default().to_string_lossy().starts_with("template") {
                     let res_json = sub_path.join("res.json");
-                    if res_json.exists() {
-                        if let Ok(content) = fs::read_to_string(&res_json) {
-                            if let Ok(val) = serde_json::from_str::<Value>(&content) {
-                                if let Some(paper_name) = val.get("name").and_then(|v| v.as_str()) {
-                                    if !paper_name.is_empty() {
+                    if res_json.exists()
+                        && let Ok(content) = fs::read_to_string(&res_json)
+                            && let Ok(val) = serde_json::from_str::<Value>(&content) {
+                                if let Some(paper_name) = val.get("name").and_then(|v| v.as_str())
+                                    && !paper_name.is_empty() {
                                         title = paper_name.to_string();
                                     }
-                                }
                                 if let Some(list) = val.get("exam_type_list").and_then(|v| v.as_array()) {
                                     for item in list {
                                         if let Some(t_name) = item.get("exam_type_name").and_then(|v| v.as_str()) {
@@ -155,8 +155,6 @@ impl LocalScanner {
                                     }
                                 }
                             }
-                        }
-                    }
                 }
             }
         }
@@ -272,17 +270,15 @@ impl LocalScanner {
                 }
 
                 let mut important_points = Vec::new();
-                if let Some(imp_val) = raw_q.get("important") {
-                    if let Value::Array(arr) = imp_val {
+                if let Some(imp_val) = raw_q.get("important")
+                    && let Value::Array(arr) = imp_val {
                         for item in arr {
-                            if let Some(s) = item.as_str() {
-                                if !s.is_empty() {
+                            if let Some(s) = item.as_str()
+                                && !s.is_empty() {
                                     important_points.push(s.to_string());
                                 }
-                            }
                         }
                     }
-                }
 
                 let mut options = Vec::new();
                 if let Some(opts) = raw_q.get("options").and_then(|v| v.as_array()) {
@@ -290,8 +286,12 @@ impl LocalScanner {
                         match opt {
                             Value::String(s) => {
                                 let trimmed = s.trim();
-                                let (label, text) = if trimmed.len() >= 2 && trimmed.chars().nth(1) == Some('.') {
-                                    (trimmed[0..1].to_string(), trimmed[2..].trim().to_string())
+                                let (label, text) = if let Some((l, r)) = trimmed.split_once('.') {
+                                    if l.chars().count() == 1 {
+                                        (l.trim().to_string(), r.trim().to_string())
+                                    } else {
+                                        ("".to_string(), trimmed.to_string())
+                                    }
                                 } else {
                                     ("".to_string(), trimmed.to_string())
                                 };
@@ -385,6 +385,9 @@ impl LocalScanner {
             local_dir: Some(folder.to_string_lossy().to_string()),
             resource_urls: Vec::new(),
             sections,
+            set_type: 0,
+            pk: 0,
+            resource_id: String::new(),
         })
     }
 }

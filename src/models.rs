@@ -25,6 +25,35 @@ pub struct ParsedQuestion {
     pub options: Vec<QuestionOption>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum HomeworkCategory {
+    #[default]
+    Current,
+    History,
+    VocabPk,
+    Local,
+}
+
+impl HomeworkCategory {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Current => "当前作业",
+            Self::History => "历史作业",
+            Self::VocabPk => "词汇PK",
+            Self::Local => "本地试卷",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Current => "正在进行的日常作业任务",
+            Self::History => "往期完成与逾期归档记录",
+            Self::VocabPk => "在线词汇竞赛与专项目标",
+            Self::Local => "本地扫描导入的离线试卷",
+        }
+    }
+}
+
 impl ParsedQuestion {
     pub fn display_category(&self) -> &str {
         match self.category.as_str() {
@@ -38,7 +67,15 @@ impl ParsedQuestion {
             "collector.3q5a" => "三问五答",
             "collector.word" => "单词辨音",
             "collector.essay" => "情景表达",
+            "word.choice" => "词汇选择",
+            "word.write" => "单词拼写",
+            "word.read" => "单词跟读",
+            "word.dictation" => "词汇听写",
+            "word.translate_en_cn" => "英译中",
+            "word.translate_cn_en" => "中译英",
+            "word_pk" => "词汇PK",
             other if other.starts_with("collector.") => &other[10..],
+            other if other.starts_with("word.") => &other[5..],
             other if !other.is_empty() => other,
             _ => "常规题型",
         }
@@ -65,11 +102,18 @@ pub struct HomeworkItem {
     pub local_dir: Option<String>,
     pub resource_urls: Vec<String>,
     pub sections: Vec<ParsedSection>,
+    pub set_type: i64,
+    pub pk: i64,
+    pub resource_id: String,
 }
 
 impl HomeworkItem {
     pub fn is_parsed(&self) -> bool {
         !self.sections.is_empty()
+    }
+
+    pub fn is_pk_or_vocab(&self) -> bool {
+        self.pk == 1 || self.set_type == 6 || (self.source == HomeworkSource::Cloud && self.resource_urls.is_empty())
     }
 
     pub fn total_questions(&self) -> usize {

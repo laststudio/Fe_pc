@@ -26,6 +26,24 @@ pub fn render(ui: &mut FluentUi, _state: &mut AppState) {
 
     ui.add_space(8.0);
 
+    // 特别致谢 (fuck_ets100 - 帅丘)
+    ui.card("特别致谢与灵感来源 (Special Thanks)", "致敬开源先锋与启发者", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("fuck_ets100").strong().color(Color32::from_rgb(0, 180, 255)).size(15.0));
+            ui.label(RichText::new("(项目作者: 帅丘)").color(Color32::from_rgb(255, 200, 50)).strong().size(13.5));
+        });
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(
+                "特别鸣谢帅丘开发的 fuck_ets100 项目！该项目对 e听说 协议结构、本地缓存体系与试卷解析算法的前驱探索与技术分享，为本项目提供了极具价值的参考与灵感启发，特此深表谢意！",
+            )
+            .color(Color32::from_gray(190))
+            .size(13.0),
+        );
+    });
+
+    ui.add_space(8.0);
+
     // 核心图形与 UI 渲染引擎
     ui.card("图形界面与渲染体系 (UI & Graphics)", "Windows 11 Fluent 视觉交互与即时渲染", |ui| {
         let ui_crates = [

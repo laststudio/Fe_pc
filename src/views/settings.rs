@@ -59,6 +59,29 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 }
             }
         });
+
+        ui.add_space(4.0);
+
+        ui.row(|ui| {
+            ui.label("动效体验:");
+            let mut anim = state.theme_config.animations;
+            if ui.toggle(&mut anim, "启用 Fluent 2 页面平滑过渡、呼吸灯与音波可视化动效").changed() {
+                state.theme_config = state.theme_config.with_animations(anim);
+                if anim {
+                    state.nav_revision = state.nav_revision.wrapping_add(1);
+                }
+                fluent_egui::winui::apply_theme(ui.ctx(), state.theme_config);
+                ui.ctx().request_repaint();
+                state.notification = Some((
+                    if anim {
+                        "已开启 Fluent 页面平滑过渡与实时动效".to_string()
+                    } else {
+                        "已关闭界面动效 (节能模式)".to_string()
+                    },
+                    InfoBarKind::Success,
+                ));
+            }
+        });
     });
 
     ui.add_space(8.0);
@@ -84,7 +107,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     ui.add_space(8.0);
 
     ui.card("关于 Fe PC", "软件信息与致谢", |ui| {
-        ui.label(RichText::new("Fuck ets100 Desktop (Fe PC) v0.1.0").strong().size(15.0));
+        ui.label(RichText::new("Fuck ets100 Desktop (Fe PC) v0.1.4").strong().size(15.0));
         ui.label("基于 Rust + fluent-egui + ets_resolver 构建的原生 Windows 11 现代化客户端。");
         ui.label("提供 e听说本地免权限试卷读取、云端作业拉取、全题型精准解析与全自动答题完成。");
 
