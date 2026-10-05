@@ -1,6 +1,6 @@
 use eframe::egui::{self, CentralPanel, Color32, Frame, Margin, Panel, RichText, ScrollArea};
 use fluent_egui::winui::prelude::*;
-use fluent_egui::winui::{self, InfoBarKind, NavigationView, NavigationViewItem};
+use fluent_egui::winui::{self, BackdropKind, InfoBarKind, NavigationView, NavigationViewItem};
 
 use crate::cloud_client::CloudClient;
 use crate::local::LocalScanner;
@@ -19,13 +19,54 @@ pub struct FepcApp {
 
 impl FepcApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        crate::telemetry::start_telemetry_pipeline();
+
         let mut state = AppState::default();
         let screenshot_target = std::env::var("FEPC_SCREENSHOT").ok();
+
+        // 最终用户许可协议 (EULA) 首次启动门禁检测
+        let eula_accepted = crate::eula::is_eula_accepted();
+        state.eula_accepted = eula_accepted;
+        if !eula_accepted {
+            state.open_eula_modal(true);
+        }
+
+        // 拉取启动策略门禁与版本检查
+        if let Ok(policy) = crate::la_client::LaClient::check_software_policy() {
+            if policy.is_kill_switch_on {
+                let msg = policy.announcement_message.as_deref().unwrap_or("客户端服务已被紧急停用 (Kill Switch 激活)，所有自动化流水线已锁定。");
+                state.notification = Some((format!("【紧急停用阻断】{msg}"), InfoBarKind::Error));
+                state.auto_running = false;
+            } else if policy.latest_version_code > crate::la_client::LA_APP_VERSION_CODE {
+                let msg = format!("发现新版本 (v{})，建议及时更新！", policy.latest_version_code);
+                state.notification = Some((msg, InfoBarKind::Warning));
+            } else if let Some(ref title) = policy.announcement_title
+                && !title.trim().is_empty() {
+                let msg = policy.announcement_message.as_deref().unwrap_or("");
+                state.notification = Some((format!("【公告: {title}】{msg}"), InfoBarKind::Informational));
+            }
+            state.software_policy = Some(policy);
+        }
+
+        // 动态加载云端功能权限与防篡改规则字典
+        if let Ok(features) = crate::la_client::LaClient::fetch_public_features() {
+            for f in features {
+                state.features.insert(f.feature_key.clone(), f);
+            }
+            state.features_loaded = true;
+        }
 
         // 尝试加载已保存的 LA Studio 会话
         if let Some(la_sess) = crate::la_client::LaClient::load_saved_session() {
             state.la_session = Some(la_sess.clone());
-            // 如果已保存 LA 会话，尝试恢复云端托管的 ETS100 会话
+            // 如果已保存 LA 会话，尝试加载用户个性化授权
+            if let Ok(user_features) = crate::la_client::LaClient::fetch_user_features(&la_sess.access_token) {
+                for f in user_features {
+                    state.features.insert(f.feature_key.clone(), f);
+                }
+                state.features_loaded = true;
+            }
+            // 尝试恢复云端托管的 ETS100 会话
             if let Ok(cloud_sess) = crate::la_client::LaClient::get_cloud_session(&la_sess.access_token, "") {
                 state.session = crate::models::UserSession {
                     phone: cloud_sess.account_display.clone(),
@@ -36,6 +77,12 @@ impl FepcApp {
                     is_logged_in: true,
                 };
                 state.la_cloud_session = Some(cloud_sess);
+            }
+            // 接入 Ed25519 鉴权平滑门控
+            let _ = crate::la_client::LaClient::authorize_feature(&la_sess.access_token, "answer_parser");
+            // 加载在线会话列表
+            if let Ok(sessions) = crate::la_client::LaClient::list_sessions(&la_sess.access_token) {
+                state.la_account_sessions = sessions;
             }
         }
 
@@ -145,8 +192,8 @@ impl FepcApp {
                 "👉 [5/14] 正在处理第 3 题 (collector.choose)...".to_string(),
             ];
             state.auto_questions_done = vec![
-                ("1".to_string(), "听后选择".to_string(), 2.0, 2.0, "已完成".to_string()),
-                ("2".to_string(), "短文朗读".to_string(), 3.8, 4.0, "已完成".to_string()),
+                ("1".to_string(), "听后选择".to_string(), 2.0, 2.0, "已完成".to_string(), None),
+                ("2".to_string(), "短文朗读".to_string(), 3.8, 4.0, "已完成".to_string(), None),
             ];
         }
 
@@ -163,6 +210,50 @@ impl FepcApp {
 impl eframe::App for FepcApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.frame_count = self.frame_count.saturating_add(1);
+
+        // 首帧安全追加加载 Windows 系统 Emoji 与 Symbol 字体库（杜绝未初始化构造期调用 ctx.fonts 导致的 panic）
+        if self.frame_count == 1 {
+            #[cfg(windows)]
+            {
+                let win_fonts = std::path::Path::new("C:\\Windows\\Fonts");
+                let has_emj = win_fonts.join("seguiemj.ttf").exists();
+                let has_sym = win_fonts.join("seguisym.ttf").exists();
+                if has_emj || has_sym {
+                    let mut font_defs = ui.ctx().fonts(|f| f.definitions().clone());
+                    let mut modified = false;
+
+                    if let Ok(bytes) = std::fs::read(win_fonts.join("seguiemj.ttf")) {
+                        font_defs.font_data.insert(
+                            "Segoe UI Emoji".to_string(),
+                            std::sync::Arc::new(eframe::egui::FontData::from_owned(bytes)),
+                        );
+                        font_defs
+                            .families
+                            .entry(eframe::egui::FontFamily::Proportional)
+                            .or_default()
+                            .push("Segoe UI Emoji".to_string());
+                        modified = true;
+                    }
+
+                    if let Ok(bytes) = std::fs::read(win_fonts.join("seguisym.ttf")) {
+                        font_defs.font_data.insert(
+                            "Segoe UI Symbol".to_string(),
+                            std::sync::Arc::new(eframe::egui::FontData::from_owned(bytes)),
+                        );
+                        font_defs
+                            .families
+                            .entry(eframe::egui::FontFamily::Proportional)
+                            .or_default()
+                            .push("Segoe UI Symbol".to_string());
+                        modified = true;
+                    }
+
+                    if modified {
+                        ui.ctx().set_fonts(font_defs);
+                    }
+                }
+            }
+        }
 
         // 自动化截图捕获支持
         if let Some(ref target_path) = self.screenshot_target.clone() {
@@ -247,6 +338,7 @@ impl eframe::App for FepcApp {
         }
 
         // 1. 同步主题配置与窗口材质
+        self.state.theme_config = self.state.theme_config.with_backdrop(self.state.backdrop_kind);
         winui::apply_theme(ui.ctx(), self.state.theme_config);
         if let Some(window) = frame.winit_window() {
             let _ = winui::sync_window_backdrop(
@@ -256,27 +348,92 @@ impl eframe::App for FepcApp {
             );
         }
 
-        if self.logo_texture.is_none()
-            && let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../fe_logo.png")) {
+        // 自动消失通知倒计时管理 (6 秒后平滑淡出，鼠标悬浮时仅顺延超时，绝不篡改进场动画时间戳)
+        let current_time = ui.ctx().input(|i| i.time);
+        if let Some((ref msg, _)) = self.state.notification {
+            if self.state.last_notification_text.as_deref() != Some(msg.as_str()) {
+                self.state.last_notification_text = Some(msg.clone());
+                self.state.notification_created_at = Some(current_time);
+                self.state.notification_expires_at = Some(current_time + 6.0);
+                self.state.notification_dismissing = false;
+                self.state.notification_dismiss_start = None;
+            }
+
+            if !self.state.notification_dismissing
+                && let Some(expires_at) = self.state.notification_expires_at
+                && current_time >= expires_at
+            {
+                self.state.notification_dismissing = true;
+                self.state.notification_dismiss_start = Some(current_time);
+            }
+        } else {
+            self.state.last_notification_text = None;
+            self.state.notification_created_at = None;
+            self.state.notification_expires_at = None;
+            self.state.notification_dismissing = false;
+            self.state.notification_dismiss_start = None;
+        }
+
+        if self.logo_texture.is_none() {
+            let texture_options = egui::TextureOptions {
+                magnification: egui::TextureFilter::Linear,
+                minification: egui::TextureFilter::Linear,
+                wrap_mode: egui::TextureWrapMode::ClampToEdge,
+                mipmap_mode: Some(egui::TextureFilter::Linear),
+            };
+            let raw_bytes = include_bytes!("../fe_logo_1024.png");
+            if let Ok(dyn_img) = image::load_from_memory(raw_bytes) {
+                let rgba = dyn_img.to_rgba8();
+                let width = dyn_img.width() as usize;
+                let height = dyn_img.height() as usize;
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                    [width, height],
+                    &rgba.into_raw(),
+                );
+                self.logo_texture = Some(ui.ctx().load_texture("app_logo", color_image, texture_options));
+            } else if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../fe_logo.png")) {
                 let color_image = egui::ColorImage::from_rgba_unmultiplied(
                     [icon.width as usize, icon.height as usize],
                     &icon.rgba,
                 );
-                self.logo_texture = Some(ui.ctx().load_texture("app_logo", color_image, egui::TextureOptions::LINEAR));
+                self.logo_texture = Some(ui.ctx().load_texture("app_logo", color_image, texture_options));
             }
+        }
 
         let is_dark = self.state.theme_config.theme.is_dark();
 
-        // 2. 纯色不透明背景色，彻底杜绝底色桌面图标透光 (Issue 2 修复)
-        let window_bg = if is_dark {
-            Color32::from_rgb(32, 32, 32)
-        } else {
-            Color32::from_rgb(243, 243, 243)
-        };
-        let sidebar_bg = if is_dark {
-            Color32::from_rgb(25, 25, 25)
-        } else {
-            Color32::from_rgb(235, 235, 235)
+        // 2. 窗口与侧边栏背景材质联动：Mica / Acrylic / Tabbed 启用时透出 Windows DWM 磨砂质感；None 纯色不透明杜绝透光
+        let (window_bg, sidebar_bg) = match self.state.backdrop_kind {
+            BackdropKind::None => {
+                if is_dark {
+                    (Color32::from_rgb(32, 32, 32), Color32::from_rgb(25, 25, 25))
+                } else {
+                    (Color32::from_rgb(243, 243, 243), Color32::from_rgb(235, 235, 235))
+                }
+            }
+            BackdropKind::Acrylic => {
+                // 亚克力材质：适度透光 (Alpha 170 / 140)，呈现磨砂半透质感
+                if is_dark {
+                    (Color32::from_rgba_unmultiplied(32, 32, 32, 175), Color32::from_rgba_unmultiplied(22, 22, 22, 140))
+                } else {
+                    (Color32::from_rgba_unmultiplied(243, 243, 243, 175), Color32::from_rgba_unmultiplied(235, 235, 235, 140))
+                }
+            }
+            BackdropKind::Mica | BackdropKind::Tabbed | BackdropKind::Auto => {
+                // Mica / Tabbed 云母材质：让 Windows 11 DWM 材质纹理透入主窗口与侧边栏 (Dark Alpha: 195/160)
+                if is_dark {
+                    (Color32::from_rgba_unmultiplied(32, 32, 32, 195), Color32::from_rgba_unmultiplied(24, 24, 24, 160))
+                } else {
+                    (Color32::from_rgba_unmultiplied(243, 243, 243, 195), Color32::from_rgba_unmultiplied(235, 235, 235, 160))
+                }
+            }
+            _ => {
+                if is_dark {
+                    (Color32::from_rgb(32, 32, 32), Color32::from_rgb(25, 25, 25))
+                } else {
+                    (Color32::from_rgb(243, 243, 243), Color32::from_rgb(235, 235, 235))
+                }
+            }
         };
 
         // 3. 左侧固定侧边栏 (Panel::left 保证高度 100% 撑满窗口，杜绝被内容高度限制)
@@ -289,11 +446,11 @@ impl eframe::App for FepcApp {
                     .inner_margin(Margin::symmetric(16, 20)),
             )
             .show(ui, |ui| {
-                // 应用标题与 Logo (采用去除黑底的精细透明 fe_logo)
+                // 应用标题与 Logo (采用 1024x1024 硬件 Trilinear Mipmap 过滤超高清 fe_logo)
                 ui.horizontal(|ui| {
                     if let Some(tex) = &self.logo_texture {
-                        ui.image((tex.id(), egui::vec2(36.0, 36.0)));
-                        ui.add_space(6.0);
+                        ui.image((tex.id(), egui::vec2(48.0, 48.0)));
+                        ui.add_space(8.0);
                     }
                     ui.vertical(|ui| {
                         ui.heading(
@@ -302,6 +459,7 @@ impl eframe::App for FepcApp {
                                 .size(20.0)
                                 .color(Color32::from_rgb(0, 180, 255)),
                         );
+                        ui.add_space(1.0);
                         ui.label(
                             RichText::new("e听说提取器 · 桌面版")
                                 .size(11.0)
@@ -409,7 +567,9 @@ impl eframe::App for FepcApp {
                     .id_salt(page_scroll_id)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let pad_x: i8 = 24;
+                        // 动态断点边距：窗口较窄时（如 < 580px），将左右内边距从 24 紧缩至 12，给内容更多排版空间
+                        let avail_w = ui.available_width();
+                        let pad_x: i8 = if avail_w < 580.0 { 12 } else { 24 };
 
                         Frame::new()
                             .inner_margin(Margin {
@@ -419,21 +579,206 @@ impl eframe::App for FepcApp {
                                 bottom: 36,
                             })
                             .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
+                                // 严格锁定内容可用宽度（双向 min / max 锁定，彻底切断子组件将父容器横向撑爆的通道）
+                                let content_w = ui.available_width();
+                                ui.set_min_width(content_w);
+                                ui.set_max_width(content_w);
 
-                                // 顶部通知条提示 (带平滑滑入/折叠隐式动效)
-                                let has_notif = self.state.notification.is_some();
-                                fluent_egui::winui::ImplicitTransition::new("notification_bar", has_notif)
-                                    .distance(12.0)
-                                    .show(ui, |ui, _t| {
-                                        if let Some((msg, kind)) = &self.state.notification {
-                                            let mut fluent_n = FluentUi::from_ui(ui);
-                                            fluent_egui::winui::InfoBar::new("系统通知", msg)
-                                                .kind(*kind)
-                                                .show(&mut fluent_n);
-                                            fluent_n.add_space(12.0);
+                                // 启动策略门禁与版本更新横幅
+                                if let Some(ref policy) = self.state.software_policy {
+                                    let is_dark = self.state.theme_config.theme.is_dark();
+                                    if policy.is_kill_switch_on {
+                                        egui::Frame::new()
+                                            .corner_radius(6.0)
+                                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(220, 50, 50)))
+                                            .fill(if is_dark { Color32::from_rgba_unmultiplied(60, 20, 20, 230) } else { Color32::from_rgb(253, 231, 233) })
+                                            .inner_margin(egui::Margin::symmetric(14, 10))
+                                            .show(ui, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new("🛑").size(16.0));
+                                                    ui.label(RichText::new("【服务已熔断停用】").strong().color(Color32::from_rgb(220, 50, 50)));
+                                                    let msg = policy.announcement_message.as_deref().unwrap_or("客户端服务已被紧急停用 (Kill Switch 激活)，所有自动化流水线已锁定。");
+                                                    ui.label(RichText::new(msg).color(if is_dark { Color32::WHITE } else { Color32::BLACK }));
+                                                });
+                                            });
+                                        ui.add_space(8.0);
+                                    } else if policy.latest_version_code > crate::la_client::LA_APP_VERSION_CODE {
+                                        egui::Frame::new()
+                                            .corner_radius(6.0)
+                                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(0, 150, 255)))
+                                            .fill(if is_dark { Color32::from_rgba_unmultiplied(20, 40, 60, 220) } else { Color32::from_rgb(235, 245, 255) })
+                                            .inner_margin(egui::Margin::symmetric(14, 10))
+                                            .show(ui, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new("🚀").size(15.0));
+                                                    ui.label(RichText::new(format!("发现新版本 (v{})！当前版本: v{}", policy.latest_version_code, crate::la_client::LA_APP_VERSION_CODE)).strong().size(12.5));
+                                                    if !policy.update_url.is_empty() {
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            if ui.button(RichText::new("🌐 前往下载更新").strong().color(Color32::from_rgb(0, 120, 215))).clicked() {
+                                                                let _ = open::that(&policy.update_url);
+                                                            }
+                                                        });
+                                                    }
+                                                });
+                                            });
+                                        ui.add_space(8.0);
+                                    }
+                                }
+
+                                // 顶部通知条提示 (紧凑 Fluent 2 InfoBar 结构，平滑进出过渡动效，杜绝生硬抽动)
+                                if let Some((msg, kind)) = self.state.notification.clone() {
+                                    let is_dark = self.state.theme_config.theme.is_dark();
+
+                                    // 动效插值因子计算 (0.0 ~ 1.0)
+                                    let anim_factor = if self.state.notification_dismissing {
+                                        let start = self.state.notification_dismiss_start.unwrap_or(current_time);
+                                        let elapsed = (current_time - start) as f32;
+                                        let duration = 0.22;
+                                        if elapsed >= duration {
+                                            self.state.notification = None;
+                                            self.state.last_notification_text = None;
+                                            self.state.notification_created_at = None;
+                                            self.state.notification_expires_at = None;
+                                            self.state.notification_dismissing = false;
+                                            self.state.notification_dismiss_start = None;
+                                            0.0
+                                        } else {
+                                            ui.ctx().request_repaint();
+                                            let t = (elapsed / duration).clamp(0.0, 1.0);
+                                            let inv = 1.0 - t;
+                                            inv * inv
                                         }
-                                    });
+                                    } else {
+                                        let created = self.state.notification_created_at.unwrap_or(current_time);
+                                        let elapsed = (current_time - created) as f32;
+                                        let duration = 0.18;
+                                        if elapsed < duration {
+                                            ui.ctx().request_repaint();
+                                            (elapsed / duration).clamp(0.0, 1.0)
+                                        } else {
+                                            1.0
+                                        }
+                                    };
+
+                                    if anim_factor > 0.001 {
+                                        let (icon_str, title_str, base_icon, base_border, base_bg) = match kind {
+                                            InfoBarKind::Success => (
+                                                "✔",
+                                                "操作成功",
+                                                if is_dark { Color32::from_rgb(108, 203, 95) } else { Color32::from_rgb(15, 123, 15) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(46, 180, 80, 110) } else { Color32::from_rgba_unmultiplied(15, 123, 15, 90) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(28, 44, 32, 235) } else { Color32::from_rgb(223, 246, 221) },
+                                            ),
+                                            InfoBarKind::Warning => (
+                                                "⚠",
+                                                "系统提醒",
+                                                if is_dark { Color32::from_rgb(252, 225, 0) } else { Color32::from_rgb(157, 93, 0) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(230, 180, 30, 110) } else { Color32::from_rgba_unmultiplied(157, 93, 0, 90) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(46, 42, 26, 235) } else { Color32::from_rgb(255, 244, 206) },
+                                            ),
+                                            InfoBarKind::Error => (
+                                                "❌",
+                                                "错误提示",
+                                                if is_dark { Color32::from_rgb(255, 120, 120) } else { Color32::from_rgb(196, 43, 28) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(240, 70, 70, 130) } else { Color32::from_rgba_unmultiplied(196, 43, 28, 100) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(48, 28, 28, 235) } else { Color32::from_rgb(253, 231, 233) },
+                                            ),
+                                            InfoBarKind::Informational => (
+                                                "ℹ",
+                                                "系统通知",
+                                                if is_dark { Color32::from_rgb(96, 205, 255) } else { Color32::from_rgb(0, 95, 184) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(0, 150, 255, 110) } else { Color32::from_rgba_unmultiplied(0, 95, 184, 90) },
+                                                if is_dark { Color32::from_rgba_unmultiplied(30, 42, 54, 235) } else { Color32::from_rgb(240, 246, 254) },
+                                            ),
+                                        };
+
+                                        let icon_color = Color32::from_rgba_unmultiplied(
+                                            base_icon.r(), base_icon.g(), base_icon.b(),
+                                            ((base_icon.a() as f32) * anim_factor) as u8,
+                                        );
+                                        let border_color = Color32::from_rgba_unmultiplied(
+                                            base_border.r(), base_border.g(), base_border.b(),
+                                            ((base_border.a() as f32) * anim_factor) as u8,
+                                        );
+                                        let bg_color = Color32::from_rgba_unmultiplied(
+                                            base_bg.r(), base_bg.g(), base_bg.b(),
+                                            ((base_bg.a() as f32) * anim_factor) as u8,
+                                        );
+
+                                        let mut close_clicked = false;
+                                        let pad_y = (8.0 * anim_factor).round() as i8;
+                                        let frame_resp = egui::Frame::new()
+                                            .corner_radius(6.0)
+                                            .stroke(egui::Stroke::new(1.0, border_color))
+                                            .fill(bg_color)
+                                            .inner_margin(egui::Margin {
+                                                left: 14,
+                                                right: 12,
+                                                top: pad_y.max(2),
+                                                bottom: pad_y.max(2),
+                                            })
+                                            .show(ui, |ui| {
+                                                // Fluent 2 紧凑单列/流式结构：左图标，中垂直图文（紧凑对齐），右关闭按钮
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 10.0;
+                                                    ui.label(RichText::new(icon_str).size(15.0).color(icon_color).strong());
+
+                                                    ui.vertical(|ui| {
+                                                        ui.spacing_mut().item_spacing.y = 2.0;
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            ui.spacing_mut().item_spacing.x = 8.0;
+                                                            ui.label(RichText::new(title_str).strong().size(13.0).color(icon_color));
+                                                            ui.add(
+                                                                egui::Label::new(
+                                                                    RichText::new(&msg)
+                                                                        .size(12.5)
+                                                                        .color(if is_dark {
+                                                                            Color32::from_rgba_unmultiplied(225, 225, 225, (225.0 * anim_factor) as u8)
+                                                                        } else {
+                                                                            Color32::from_rgba_unmultiplied(35, 35, 35, (225.0 * anim_factor) as u8)
+                                                                        }),
+                                                                )
+                                                                .wrap(),
+                                                            );
+                                                        });
+                                                    });
+
+                                                    ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                                                        let close_color = if is_dark {
+                                                            Color32::from_rgba_unmultiplied(180, 180, 180, (180.0 * anim_factor) as u8)
+                                                        } else {
+                                                            Color32::from_rgba_unmultiplied(90, 90, 90, (180.0 * anim_factor) as u8)
+                                                        };
+                                                        let close_btn = ui.add(
+                                                            egui::Button::new(
+                                                                RichText::new("\u{00D7}")
+                                                                    .size(16.0)
+                                                                    .color(close_color),
+                                                            )
+                                                            .frame(false),
+                                                        );
+                                                        if close_btn.hovered() {
+                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                                        }
+                                                        if close_btn.clicked() {
+                                                            close_clicked = true;
+                                                        }
+                                                    });
+                                                });
+                                            });
+
+                                        if frame_resp.response.hovered() && !self.state.notification_dismissing {
+                                            // 鼠标悬停顺延 6 秒超时倒计时，绝对不修改进场动画基准时间 notification_created_at
+                                            self.state.notification_expires_at = Some(current_time + 6.0);
+                                        }
+
+                                        if close_clicked && !self.state.notification_dismissing {
+                                            self.state.notification_dismissing = true;
+                                            self.state.notification_dismiss_start = Some(current_time);
+                                        }
+                                        ui.add_space((10.0 * anim_factor).round());
+                                    }
+                                }
 
                                 // 页面切换平滑过渡动效 (Fluent PageTransition: 20px 向上缓入 + 0.24s 立方缓出淡入)
                                 let cur_tab = self.state.current_tab;
@@ -511,5 +856,11 @@ impl eframe::App for FepcApp {
                             });
                     });
             });
+
+        // 渲染全局 WinUI 风格权限拦截与会员特权引导模态对话框
+        crate::views::render_auth_gate_modal(ui.ctx(), &mut self.state);
+
+        // 渲染全局 WinUI 风格用户服务协议与免责声明 (EULA) 模态对话框
+        crate::views::render_eula_modal(ui.ctx(), &mut self.state);
     }
 }

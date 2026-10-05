@@ -1,0 +1,1 @@
+You can bundle the "SplashScreen.bmp" with XBundler

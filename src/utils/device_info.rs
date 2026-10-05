@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-pub const APPLICATION_ID: &str = "com.shuaiqiu.fepc";
+pub const APPLICATION_ID: &str = "cc.lastudio.fepc";
 pub const SIGNING_CERT_SHA256: &str = "79fe6f92aa7f46084832cd62292c223101586b46e3cfaf39740fef1c6253aaca";
-pub const VERSION_CODE: i64 = 17;
+pub const VERSION_CODE: i64 = 105;
 
 #[derive(Serialize, Deserialize, Default)]
 struct SavedDeviceInfo {
@@ -60,15 +60,19 @@ pub fn get_platform_device_id() -> String {
     })
 }
 
-fn get_raw_machine_guid() -> Option<String> {
+fn get_registry_value_sz(subkey_str: &str, value_name_str: &str) -> Option<String> {
     #[cfg(windows)]
     {
         use windows::core::PCWSTR;
-        use windows::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ};
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+        };
 
         unsafe {
-            let subkey: Vec<u16> = "SOFTWARE\\Microsoft\\Cryptography\0".encode_utf16().collect();
-            let value_name: Vec<u16> = "MachineGuid\0".encode_utf16().collect();
+            let mut subkey: Vec<u16> = subkey_str.encode_utf16().collect();
+            subkey.push(0);
+            let mut val_name: Vec<u16> = value_name_str.encode_utf16().collect();
+            val_name.push(0);
             let mut hkey = windows::Win32::System::Registry::HKEY::default();
 
             if RegOpenKeyExW(
@@ -77,14 +81,16 @@ fn get_raw_machine_guid() -> Option<String> {
                 Some(0),
                 KEY_READ,
                 &mut hkey,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 let mut buffer = [0u16; 128];
                 let mut buf_len = (buffer.len() * std::mem::size_of::<u16>()) as u32;
                 let mut val_type = REG_SZ;
 
                 let res = RegQueryValueExW(
                     hkey,
-                    PCWSTR(value_name.as_ptr()),
+                    PCWSTR(val_name.as_ptr()),
                     None,
                     Some(&mut val_type),
                     Some(buffer.as_mut_ptr() as *mut u8),
@@ -108,13 +114,33 @@ fn get_raw_machine_guid() -> Option<String> {
     None
 }
 
+fn get_raw_machine_guid() -> Option<String> {
+    get_registry_value_sz("SOFTWARE\\Microsoft\\Cryptography", "MachineGuid")
+}
+
 pub fn get_device_name() -> String {
     let comp = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Desktop".to_string());
     format!("PC-{comp}")
 }
 
 pub fn get_platform_version() -> String {
-    "Android 15 (SDK 35)".to_string()
+    #[cfg(windows)]
+    {
+        if let Some(build_str) = get_registry_value_sz("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuild")
+            && let Ok(build_num) = build_str.parse::<u32>()
+        {
+            if build_num >= 22000 {
+                return format!("Windows 11 (Build {build_num})");
+            } else {
+                return format!("Windows 10 (Build {build_num})");
+            }
+        }
+        "Windows 11 (x64)".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        "Windows 11 (x64)".to_string()
+    }
 }
 
 pub fn get_device_payload() -> Value {
@@ -125,6 +151,7 @@ pub fn get_device_payload() -> Value {
         "signing_certificate_sha256": SIGNING_CERT_SHA256,
         "version_code": VERSION_CODE,
         "device_name": get_device_name(),
+        "platform": "windows",
         "platform_version": get_platform_version(),
     })
 }

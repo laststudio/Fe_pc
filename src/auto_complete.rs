@@ -8,7 +8,7 @@ use crate::cloud_client::CloudClient;
 use crate::models::{HomeworkItem, ParsedQuestion, UserSession};
 use crate::workflow::oss::OssUploader;
 use crate::workflow::scoring::{self, ScoreProfile};
-use crate::workflow::tts::EdgeTtsService;
+use crate::workflow::tts::synthesize_auto;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AutoCompleteConfig {
@@ -21,6 +21,47 @@ pub struct AutoCompleteConfig {
     pub accuracy: f64,
     pub fluency: f64,
     pub integrity: f64,
+    pub allow_over_max: bool,
+    #[serde(default = "default_tts_mode")]
+    pub tts_mode: String,
+    #[serde(default)]
+    pub http_tts_url: String,
+    #[serde(default)]
+    pub http_tts_key: String,
+    #[serde(default = "default_http_tts_model")]
+    pub http_tts_model: String,
+    #[serde(default)]
+    pub clone_reference_path: String,
+    #[serde(default = "default_mode")]
+    pub mode: String, // "auto" 或 "manual"
+    #[serde(default = "default_use_time_source")]
+    pub use_time_source: String, // "smart" 或 "manual"
+    #[serde(default)]
+    pub time_reroll_nonce: u64,
+    #[serde(default)]
+    pub score_reroll_nonce: u64,
+    #[serde(default)]
+    pub clone_voice_id: String,
+    #[serde(default)]
+    pub per_question_scores: std::collections::HashMap<usize, f64>,
+    #[serde(default)]
+    pub per_question_audio: std::collections::HashMap<usize, String>,
+}
+
+fn default_tts_mode() -> String {
+    "edge".to_string()
+}
+
+fn default_http_tts_model() -> String {
+    "tts-1".to_string()
+}
+
+fn default_mode() -> String {
+    "auto".to_string()
+}
+
+fn default_use_time_source() -> String {
+    "smart".to_string()
 }
 
 impl Default for AutoCompleteConfig {
@@ -35,8 +76,32 @@ impl Default for AutoCompleteConfig {
             accuracy: 4.95,
             fluency: 4.95,
             integrity: 4.95,
+            allow_over_max: false,
+            tts_mode: "edge".to_string(),
+            http_tts_url: String::new(),
+            http_tts_key: String::new(),
+            http_tts_model: "tts-1".to_string(),
+            clone_reference_path: String::new(),
+            mode: "auto".to_string(),
+            use_time_source: "smart".to_string(),
+            time_reroll_nonce: 0,
+            score_reroll_nonce: 0,
+            clone_voice_id: String::new(),
+            per_question_scores: std::collections::HashMap::new(),
+            per_question_audio: std::collections::HashMap::new(),
         }
     }
+}
+
+pub fn check_homework_compatibility(homework: &HomeworkItem) -> Result<(), String> {
+    let hw_name = homework.name.to_lowercase();
+    if hw_name.contains("作文") || hw_name.contains("composition") || hw_name.contains("写作") {
+        return Err("检测到试卷包含【英语作文/写作】题型，暂不支持全自动作答，请在客户端手动完成。".to_string());
+    }
+    if hw_name.contains("听写") || hw_name.contains("dictation") || hw_name.contains("拼写") {
+        return Err("检测到试卷包含【单词听写/拼写】题型，暂不支持全自动作答。".to_string());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +115,7 @@ pub enum AutoProgressMsg {
         score: f64,
         max_score: f64,
         status: String,
+        audio_path: Option<String>,
     },
     Complete { success: bool, final_score: f64, message: String },
 }
@@ -282,19 +348,64 @@ impl AutoCompleteWorkflow {
             },
         });
 
-        let target_per_question = (config.target_total / total_questions as f64).clamp(0.0, 5.0);
-        let max_per_question = (homework.total_point / total_questions as f64).max(1.0);
+        // 预先计算加权拟真分配方案 (包含客观题二值化、0.125档位、失误题加权及大题防满分)
+        let allocations = scoring::plan_question_allocations(
+            &flat_questions,
+            config.target_total,
+            config.score_reroll_nonce,
+            config.allow_over_max,
+        );
 
         let temp_dir = std::env::temp_dir().join("fepc_run").join(&homework.id);
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let mut completed_questions = 0;
+        let mut total_accumulated_score = 0.0;
 
         for (idx, q) in flat_questions.iter().enumerate() {
             let q_num = &q.number;
+            let alloc = allocations.get(idx);
+            let q_max_score = if let Some(a) = alloc {
+                a.max_score
+            } else {
+                (homework.total_point / total_questions as f64).max(1.0)
+            };
+
+            // 模式判别：手动模式优先采用手动指定分数；一键自动模式采用加权拟真分配
+            let (target_q_score, target_ise) = if config.mode == "manual" {
+                let manual_val = config.per_question_scores.get(&idx).copied().unwrap_or_else(|| {
+                    alloc.map(|a| a.allocated_score).unwrap_or(2.5)
+                });
+                let ise = if q_max_score > 0.0 {
+                    let raw = (manual_val * 5.0 / q_max_score) - 0.0001;
+                    scoring::round_points(raw.clamp(0.0, 5.0))
+                } else {
+                    5.0
+                };
+                (manual_val, ise)
+            } else if let Some(a) = alloc {
+                (a.allocated_score, a.ise_score)
+            } else {
+                (config.target_total / total_questions as f64, 4.9)
+            };
+
+            let alloc_tag = if let Some(a) = alloc {
+                if a.is_full {
+                    "[满分]"
+                } else if a.is_mistake {
+                    "[失误题]"
+                } else if a.is_big_question {
+                    "[长难大题]"
+                } else {
+                    ""
+                }
+            } else {
+                ""
+            };
+
             let _ = sender.send(AutoProgressMsg::Log(format!(
-                "👉 [{}/{}] 正在处理第 {} 题 (题型: {})...",
-                idx + 1, total_questions, q_num, q.category
+                "👉 [{}/{}] 处理第 {} 题 ({} · 计划 {:.2}/{:.2} 分 {})",
+                idx + 1, total_questions, q_num, q.category, target_q_score, q_max_score, alloc_tag
             )));
 
             // 确定答题文本
@@ -313,19 +424,53 @@ impl AutoCompleteWorkflow {
                 String::new()
             };
 
-            // 1. 生成 TTS 语音
+            // 1. 获取答题音频：手动模式优先检查该题是否有本地自定义音频，否则走 TTS / 克隆
             let mut audio_bytes = Vec::new();
-            if !is_choice && !text_to_answer.trim().is_empty() {
-                match EdgeTtsService::synthesize(
+            let custom_audio = if config.mode == "manual" {
+                config.per_question_audio.get(&idx).cloned()
+            } else {
+                None
+            };
+
+            if let Some(ref path_str) = custom_audio
+                && !path_str.trim().is_empty()
+                && let Ok(bytes) = std::fs::read(path_str)
+            {
+                audio_bytes = bytes;
+                let _ = sender.send(AutoProgressMsg::Log(format!(
+                    "  ✓ [自定义音频] 已加载本地录音: {} ({} 字节)",
+                    path_str, audio_bytes.len()
+                )));
+            }
+
+            if audio_bytes.is_empty() && !is_choice && !text_to_answer.trim().is_empty() {
+                let http_url = if config.http_tts_url.trim().is_empty() { None } else { Some(config.http_tts_url.as_str()) };
+                let http_key = if config.http_tts_key.trim().is_empty() { None } else { Some(config.http_tts_key.as_str()) };
+                let http_model = if config.http_tts_model.trim().is_empty() { None } else { Some(config.http_tts_model.as_str()) };
+                let clone_ref = if config.clone_reference_path.trim().is_empty() { None } else { Some(config.clone_reference_path.as_str()) };
+
+                match synthesize_auto(
                     &text_to_answer,
+                    &config.tts_mode,
                     Some(&config.voice_name),
                     Some(config.rate),
                     Some(config.pitch),
+                    http_url,
+                    http_key,
+                    http_model,
+                    clone_ref,
                 ) {
                     Ok(bytes) => {
                         audio_bytes = bytes;
+                        let engine_desc = if config.tts_mode.eq_ignore_ascii_case("clone") {
+                            "Voice Clone"
+                        } else if config.tts_mode.eq_ignore_ascii_case("http") {
+                            "HTTP TTS"
+                        } else {
+                            "Edge TTS"
+                        };
                         let _ = sender.send(AutoProgressMsg::Log(format!(
-                            "  ✓ [TTS] 语音合成完毕 (大小: {} 字节)",
+                            "  ✓ [{engine_desc}] 语音合成完毕 (大小: {} 字节)",
                             audio_bytes.len()
                         )));
                     }
@@ -335,12 +480,21 @@ impl AutoCompleteWorkflow {
                 }
             }
 
+            // 保存音频切片以供答题完成后即时回放试听
+            let mut saved_audio_path = None;
+            if !audio_bytes.is_empty() {
+                let audio_file = temp_dir.join(format!("{}_{}.mp3", idx + 1, q_num));
+                if std::fs::write(&audio_file, &audio_bytes).is_ok() {
+                    saved_audio_path = Some(audio_file.to_string_lossy().to_string());
+                }
+            }
+
             // 2. 生成标准科大讯飞评测 XML
             let profile = ScoreProfile {
-                total: target_per_question,
-                accuracy: config.accuracy,
-                fluency: config.fluency,
-                integrity: config.integrity,
+                total: target_ise,
+                accuracy: config.accuracy.min(5.0),
+                fluency: config.fluency.min(5.0),
+                integrity: config.integrity.min(5.0),
                 stress: 4.90,
             }.clamped();
 
@@ -349,6 +503,7 @@ impl AutoCompleteWorkflow {
                 &profile,
                 &q.category,
                 idx as u64,
+                !config.allow_over_max,
             );
 
             // 3. 上传与同步
@@ -386,16 +541,27 @@ impl AutoCompleteWorkflow {
                     0.125,
                 );
 
+                let q_use_time: u32 = if is_choice {
+                    6
+                } else {
+                    let words = text_to_answer.split_whitespace().count();
+                    if words > 0 {
+                        ((words as f64 / 2.2).max(3.0)).round() as u32
+                    } else {
+                        5
+                    }
+                };
+
                 let sync_params = json!({
                     "homework_id": homework.id.parse::<i64>().unwrap_or(0),
                     "resource_id": resource_id,
                     "set_id": "",
                     "entity_id": q_num,
                     "order": format!("{}", idx + 1),
-                    "score": format!("{:.2}", profile.total),
-                    "correct": 1,
+                    "score": format!("{:.2}", target_q_score),
+                    "correct": if target_q_score > 0.0 { 1 } else { 0 },
                     "auto_submit": 1,
-                    "use_time": 8,
+                    "use_time": q_use_time,
                     "graduation": 0.125,
                     "upload_file_id": upload_file_id,
                     "upload_file_url": audio_url,
@@ -416,7 +582,7 @@ impl AutoCompleteWorkflow {
                     Ok(_) => {
                         let _ = sender.send(AutoProgressMsg::Log(format!(
                             "  ✓ 第 {} 题同步成功 (得分: {:.2})",
-                            q_num, profile.total
+                            q_num, target_q_score
                         )));
                     }
                     Err(e) => {
@@ -430,26 +596,23 @@ impl AutoCompleteWorkflow {
                 // 试运行：写出本地文件供核验
                 let xml_file = temp_dir.join(format!("{}_{}.xml", idx + 1, q_num));
                 let _ = std::fs::write(&xml_file, &xml_content);
-                if !audio_bytes.is_empty() {
-                    let audio_file = temp_dir.join(format!("{}_{}.mp3", idx + 1, q_num));
-                    let _ = std::fs::write(&audio_file, &audio_bytes);
-                }
                 let _ = sender.send(AutoProgressMsg::Log(format!(
                     "  ✓ [试运行] 第 {} 题完成 (得分: {:.2})",
-                    q_num, profile.total
+                    q_num, target_q_score
                 )));
             }
 
-            let awarded = scoring::convert_score(profile.total, max_per_question, 0.125);
             completed_questions += 1;
+            total_accumulated_score += target_q_score;
 
             let _ = sender.send(AutoProgressMsg::QuestionDone {
                 index: idx,
                 number: q_num.clone(),
                 category: q.category.clone(),
-                score: awarded,
-                max_score: max_per_question,
+                score: target_q_score,
+                max_score: q_max_score,
                 status: "完成".to_string(),
+                audio_path: saved_audio_path,
             });
 
             // 拟人化自然波动停顿：模拟真实思考与做题网络交互 (600ms ~ 1400ms 动态抖动)
@@ -457,14 +620,20 @@ impl AutoCompleteWorkflow {
             std::thread::sleep(Duration::from_millis(jitter));
         }
 
-        // 阶段 7: set-use-time 提交做题总用时
+        // 阶段 7: set-use-time 提交做题总用时 (支持智能散列用时与手动自定义用时)
         let _ = sender.send(AutoProgressMsg::Step {
             current: 7,
             total: 8,
             title: "上报模拟答题总用时 (set-use-time)".to_string(),
         });
 
-        let total_use_secs = config.use_time_seconds.max(60);
+        let total_use_secs = if config.use_time_source == "smart" {
+            let (smart_secs, _) = scoring::calculate_smart_use_time(&homework, config.time_reroll_nonce);
+            smart_secs.max(30)
+        } else {
+            config.use_time_seconds.max(30)
+        };
+
         if !config.no_upload {
             match CloudClient::set_use_time(
                 &session.token,
@@ -494,9 +663,19 @@ impl AutoCompleteWorkflow {
             title: "终审提交试卷与核验成绩 (report-score)".to_string(),
         });
 
-        let final_calc_score = config.target_total.min(homework.total_point);
+        let final_calc_score = scoring::round_points(if config.allow_over_max {
+            total_accumulated_score
+        } else {
+            total_accumulated_score.min(homework.total_point)
+        });
         let score_rate = if homework.total_point > 0.0 {
-            ((final_calc_score / homework.total_point).clamp(0.0, 1.0) * 1_000_000.0).round() as i64
+            let rate = final_calc_score / homework.total_point;
+            let clamped_rate = if config.allow_over_max {
+                rate.max(0.0)
+            } else {
+                rate.clamp(0.0, 1.0)
+            };
+            (clamped_rate * 1_000_000.0).round() as i64
         } else {
             1_000_000
         };
@@ -621,7 +800,12 @@ impl AutoCompleteWorkflow {
         });
 
         let target_ratio = if homework.total_point > 0.0 {
-            (config.target_total / homework.total_point).clamp(0.0, 1.0)
+            let ratio = config.target_total / homework.total_point;
+            if config.allow_over_max {
+                ratio.max(0.0)
+            } else {
+                ratio.clamp(0.0, 1.0)
+            }
         } else {
             1.0
         };
@@ -647,17 +831,19 @@ impl AutoCompleteWorkflow {
 
             let point = if is_correct { 1.0 } else { 0.0 };
             let q_num_i64 = q.number.parse::<i64>().unwrap_or((idx + 1) as i64);
+            let word_id = q.word_id.unwrap_or(q_num_i64);
+            let question_id = q.question_id.unwrap_or(q_num_i64);
 
             pk_details.push(json!({
                 "point": if is_correct { 1 } else { 0 },
                 "answer": ans,
-                "word_id": q_num_i64,
-                "question_id": q_num_i64
+                "word_id": word_id,
+                "question_id": question_id
             }));
 
             vocab_details.push(json!({
-                "word_id": q_num_i64,
-                "question_id": q_num_i64,
+                "word_id": word_id,
+                "question_id": question_id,
                 "score_rate": if is_correct { 1 } else { 0 },
                 "score_detail": format!("{{\"choose\":\"{}\",\"version\":\"3\"}}", ans),
                 "client_time": now,
@@ -675,6 +861,7 @@ impl AutoCompleteWorkflow {
                 score: earned,
                 max_score: max_score_per_q,
                 status: if is_correct { "正确".to_string() } else { "故意答错(控分)".to_string() },
+                audio_path: None,
             });
         }
 
@@ -686,12 +873,17 @@ impl AutoCompleteWorkflow {
                         serial_id = s.to_string();
                     }
                 if serial_id.is_empty() {
-                    let w_ids: Vec<String> = flat_questions.iter().map(|q| q.number.clone()).collect();
+                    let w_ids: Vec<String> = flat_questions.iter().map(|q| {
+                        q.word_id.map(|id| id.to_string()).unwrap_or_else(|| q.number.clone())
+                    }).collect();
+                    let q_ids: Vec<String> = flat_questions.iter().map(|q| {
+                        q.question_id.map(|id| id.to_string()).unwrap_or_else(|| q.number.clone())
+                    }).collect();
                     let start_params = json!({
                         "unit_id": 0,
                         "book_id": 0,
                         "word_ids": w_ids.join(","),
-                        "question_ids": w_ids.join(","),
+                        "question_ids": q_ids.join(","),
                         "name": homework.name,
                         "source": 1,
                         "version": 1,
@@ -745,9 +937,19 @@ impl AutoCompleteWorkflow {
             title: "终审提交试卷与核验成绩 (report-score)".to_string(),
         });
 
-        let final_calc_score = config.target_total.min(homework.total_point);
+        let final_calc_score = if config.allow_over_max {
+            config.target_total
+        } else {
+            config.target_total.min(homework.total_point)
+        };
         let score_rate = if homework.total_point > 0.0 {
-            ((final_calc_score / homework.total_point).clamp(0.0, 1.0) * 1_000_000.0).round() as i64
+            let rate = final_calc_score / homework.total_point;
+            let clamped_rate = if config.allow_over_max {
+                rate.max(0.0)
+            } else {
+                rate.clamp(0.0, 1.0)
+            };
+            (clamped_rate * 1_000_000.0).round() as i64
         } else {
             1_000_000
         };

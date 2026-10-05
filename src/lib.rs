@@ -8,4 +8,6 @@ pub mod state;
 pub mod utils;
 pub mod views;
 pub mod workflow;
+pub mod telemetry;
 pub mod themida_sdk;
+pub mod eula;

@@ -1,0 +1,334 @@
+name: Build & Release Fe PC
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: '发布版本号 (留空则自动从 Cargo.toml 提取，如: 0.1.4)'
+        required: false
+        default: ''
+        type: string
+      custom_tag:
+        description: '公开 Release 标签 (留空则默认为 v<版本号>，如: v0.1.4)'
+        required: false
+        default: ''
+        type: string
+      release_title:
+        description: 'Release 标题 (留空则默认为 Fe PC v<版本号>)'
+        required: false
+        default: ''
+        type: string
+      publish_public:
+        description: '是否发布到公开仓库 laststudio/Fuck_ets100_pc'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fepc-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_RELEASE_REPOSITORY: laststudio/Fuck_ets100_pc
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: 构建与发布 Windows x64 (Themida 加壳)
+    runs-on: windows-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: 检出 fepc 源码
+        uses: actions/checkout@v4
+        with:
+          path: fepc
+          fetch-depth: 0
+
+      - name: 并列检出 fluent-egui 依赖
+        uses: actions/checkout@v4
+        with:
+          repository: laststudio/fluent-egui
+          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          path: fluent-egui
+
+      - name: 并列检出 ets_resolver 依赖
+        uses: actions/checkout@v4
+        with:
+          repository: laststudio/ets_resolver
+          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          path: ets_resolver
+
+      - name: 配置 Rust 工具链 (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 计算版本号与 Release 元数据
+        id: meta
+        shell: pwsh
+        run: |
+          $RawVerInput = "${{ inputs.release_version }}".Trim()
+          $RawTagInput = "${{ inputs.custom_tag }}".Trim()
+          $RawTitleInput = "${{ inputs.release_title }}".Trim()
+          $PublishPublic = "${{ inputs.publish_public }}"
+          if ([string]::IsNullOrWhiteSpace($PublishPublic)) {
+            $PublishPublic = "true"
+          }
+
+          # 1. 解析目标版本号
+          if ($RawVerInput) {
+            $Version = $RawVerInput.TrimStart('v').TrimStart('V')
+          } else {
+            $CargoToml = Get-Content "fepc\Cargo.toml" -Raw
+            if ($CargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
+              $Version = $matches[1]
+            } else {
+              $Version = "0.1.5"
+            }
+          }
+
+          # 2. 解析公开 Release 标签
+          if ($RawTagInput) {
+            $PublicTag = $RawTagInput
+          } else {
+            $PublicTag = "v$Version"
+          }
+
+          # 3. 解析 Release 标题
+          if ($RawTitleInput) {
+            $Title = $RawTitleInput
+          } else {
+            $Title = "Fe PC $PublicTag"
+          }
+
+          # 4. 计算内部 CI 构建标签与产物文件名
+          $ShaShort = "${{ github.sha }}".Substring(0, 11)
+          $CiTag = "v${Version}-${ShaShort}"
+          $ZipName = "fepc-v${Version}-windows-x64.zip"
+
+          Write-Host "================ Release 元数据 ================" -ForegroundColor Cyan
+          Write-Host "  Version:        $Version" -ForegroundColor Gray
+          Write-Host "  Public Tag:     $PublicTag" -ForegroundColor Gray
+          Write-Host "  CI Tag:         $CiTag" -ForegroundColor Gray
+          Write-Host "  Title:          $Title" -ForegroundColor Gray
+          Write-Host "  Zip Name:       $ZipName" -ForegroundColor Gray
+          Write-Host "  Publish Public: $PublishPublic" -ForegroundColor Gray
+          Write-Host "================================================" -ForegroundColor Cyan
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$Version"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "public_tag=$PublicTag"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "ci_tag=$CiTag"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "title=$Title"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "zip_name=$ZipName"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "publish_public=$PublishPublic"
+
+      - name: 运行单元测试
+        working-directory: fepc
+        run: cargo test --release
+
+      - name: 构建原生二进制 (cargo build --release)
+        working-directory: fepc
+        run: cargo build --release
+
+      - name: 验证原生编译产物
+        shell: pwsh
+        working-directory: fepc
+        run: |
+          $RawExe = "target\release\fepc.exe"
+          if (-not (Test-Path $RawExe)) {
+            Write-Error "[-] 致命错误: 未生成原生编译产物 $RawExe"
+            exit 1
+          }
+          $Len = (Get-Item $RawExe).Length
+          Write-Host "[+] 原生可执行文件已就绪: $RawExe ($([math]::Round($Len / 1MB, 2)) MB)" -ForegroundColor Green
+
+      - name: 装配 Themida 64-bit 加壳引擎
+        id: themida_setup
+        working-directory: fepc
+        shell: pwsh
+        env:
+          THEMIDA_ARCHIVE_URL: ${{ secrets.THEMIDA_ARCHIVE_URL }}
+          THEMIDA_DECRYPT_KEY: ${{ secrets.THEMIDA_DECRYPT_KEY }}
+          THEMIDA_REPO: ${{ vars.THEMIDA_REPO || 'laststudio/themida_tools' }}
+          THEMIDA_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/setup_themida.ps1 -Strict
+
+      - name: 执行 Themida 虚拟机多态混淆与装甲注入
+        working-directory: fepc
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File protect_themida.ps1 `
+            -ThemidaPath "$env:THEMIDA_PATH" `
+            -InputExe "target\release\fepc.exe" `
+            -OutputExe "target\release\fepc_protected.exe" `
+            -ProjectFile "fepc.tmd"
+
+      - name: 打包分发构件与哈希计算
+        id: pack
+        working-directory: fepc
+        shell: pwsh
+        run: |
+          $ProtectedExe = "target\release\fepc_protected.exe"
+          if (-not (Test-Path $ProtectedExe)) {
+            Write-Error "[-] 致命错误: 未检测到加壳产物 $ProtectedExe"
+            exit 1
+          }
+
+          $DistDir = "dist"
+          if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir -Force | Out-Null }
+
+          # 1. 复制单文件便携版 (加壳后的 fepc.exe)
+          $PortableExe = Join-Path $DistDir "fepc.exe"
+          Copy-Item -Path $ProtectedExe -Destination $PortableExe -Force
+
+          # 2. 准备绿色解压包目录
+          $ZipStageDir = Join-Path $DistDir "zip_stage"
+          if (Test-Path $ZipStageDir) { Remove-Item -Path $ZipStageDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $ZipStageDir -Force | Out-Null
+
+          Copy-Item -Path $PortableExe -Destination (Join-Path $ZipStageDir "fepc.exe") -Force
+          if (Test-Path "USER_AGREEMENT.md") { Copy-Item -Path "USER_AGREEMENT.md" -Destination $ZipStageDir -Force }
+          if (Test-Path "update.md") { Copy-Item -Path "update.md" -Destination $ZipStageDir -Force }
+
+          $ZipFile = Join-Path $DistDir "${{ steps.meta.outputs.zip_name }}"
+          Compress-Archive -Path "$ZipStageDir\*" -DestinationPath $ZipFile -Force
+          Remove-Item -Path $ZipStageDir -Recurse -Force
+
+          # 3. 计算 SHA-256 校验和
+          $HashExe = (Get-FileHash -Path $PortableExe -Algorithm SHA256).Hash.ToLower()
+          $HashZip = (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLower()
+
+          $ShaFile = Join-Path $DistDir "sha256sums.txt"
+          "$HashExe  fepc.exe`n$HashZip  ${{ steps.meta.outputs.zip_name }}" | Set-Content -Path $ShaFile -Encoding utf8
+
+          Write-Host "================ 产物校验清单 ================" -ForegroundColor Green
+          Write-Host "  fepc.exe:                          $HashExe ($([math]::Round((Get-Item $PortableExe).Length / 1MB, 2)) MB)" -ForegroundColor Gray
+          Write-Host "  ${{ steps.meta.outputs.zip_name }}: $HashZip ($([math]::Round((Get-Item $ZipFile).Length / 1MB, 2)) MB)" -ForegroundColor Gray
+          Write-Host "==============================================" -ForegroundColor Green
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "hash_exe=$HashExe"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "hash_zip=$HashZip"
+
+      - name: 提取更新日志并生成 Release Notes
+        working-directory: fepc
+        shell: pwsh
+        run: |
+          python scripts/release/extract_changelog.py `
+            --version "${{ steps.meta.outputs.version }}" `
+            --title "${{ steps.meta.outputs.title }}" `
+            --sha256-file "dist/sha256sums.txt" `
+            --release-notes "release_notes.md" `
+            --changelog-output "current_changelog.md"
+
+      - name: 沉淀内部 CI 构建 (发布至当前代码仓库)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.ci_tag }}
+          name: "${{ steps.meta.outputs.title }} (${{ steps.meta.outputs.ci_tag }})"
+          draft: false
+          prerelease: false
+          body_path: fepc/release_notes.md
+          files: |
+            fepc/dist/fepc.exe
+            fepc/dist/${{ steps.meta.outputs.zip_name }}
+            fepc/dist/sha256sums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 发布官方 Release 至 Fuck_ets100_pc
+        if: steps.meta.outputs.publish_public == 'true'
+        working-directory: fepc
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          $PublicRepo = $env:PUBLIC_RELEASE_REPOSITORY
+          $Tag = "${{ steps.meta.outputs.public_tag }}"
+          $Title = "${{ steps.meta.outputs.title }}"
+          $ZipName = "${{ steps.meta.outputs.zip_name }}"
+          $NotesFile = "release_notes.md"
+
+          $PortableExe = "dist\fepc.exe"
+          $ZipPath = "dist\$ZipName"
+          $ShaPath = "dist\sha256sums.txt"
+
+          if (-not $env:GH_TOKEN) {
+            Write-Error "[-] 错误: 缺少 PUBLIC_RELEASE_TOKEN Secret，无法发布到公开目标仓库 $PublicRepo"
+            exit 1
+          }
+
+          Write-Host "[*] 检查目标仓库 $PublicRepo 中是否存在标签 $Tag ..." -ForegroundColor Cyan
+          $ReleaseExists = $false
+          try {
+            & gh release view "$Tag" --repo "$PublicRepo" | Out-Null
+            if ($LASTEXITCODE -eq 0) { $ReleaseExists = $true }
+          } catch {
+            $ReleaseExists = $false
+          }
+
+          if ($ReleaseExists) {
+            Write-Host "[*] 发现已存在 Release $Tag，正在更新标题、更新说明并覆盖附件..." -ForegroundColor Yellow
+            & gh release edit "$Tag" `
+              --repo "$PublicRepo" `
+              --title "$Title" `
+              --notes-file "$NotesFile" `
+              --latest
+
+            & gh release upload "$Tag" `
+              --repo "$PublicRepo" `
+              --clobber `
+              "$PortableExe" `
+              "$ZipPath" `
+              "$ShaPath"
+          } else {
+            Write-Host "[*] 正在创建全新正式 Release $Tag 并上传构建资产..." -ForegroundColor Green
+            & gh release create "$Tag" `
+              --repo "$PublicRepo" `
+              --title "$Title" `
+              --notes-file "$NotesFile" `
+              --latest `
+              "$PortableExe" `
+              "$ZipPath" `
+              "$ShaPath"
+          }
+
+          Write-Host "[+] 官方 Release 发布大获成功: https://github.com/$PublicRepo/releases/tag/$Tag" -ForegroundColor Green
+
+      - name: 汇总生成 GitHub Step Summary
+        if: always()
+        working-directory: fepc
+        shell: pwsh
+        run: |
+          $Summary = @"
+          # 🚀 Fe PC 自动化构建与发布汇总
+
+          | 属性 | 取值 |
+          | :--- | :--- |
+          | **发布版本 (Version)** | \`${{ steps.meta.outputs.version }}\` |
+          | **公开 Release 标签** | \`${{ steps.meta.outputs.public_tag }}\` |
+          | **内部 CI 标签** | \`${{ steps.meta.outputs.ci_tag }}\` |
+          | **公开目标仓库** | [${{ env.PUBLIC_RELEASE_REPOSITORY }}](https://github.com/${{ env.PUBLIC_RELEASE_REPOSITORY }}) |
+          | **Themida 加壳状态** | ✅ 成功注入 (Lion64 / Tiger64 虚拟机多态编译) |
+
+          ## 📦 构建产物指纹清单
+
+          - **\`fepc.exe\`** (单文件加壳便携版)  
+            \`${{ steps.pack.outputs.hash_exe }}\`
+          - **\`${{ steps.meta.outputs.zip_name }}\`** (标准绿色压缩包)  
+            \`${{ steps.pack.outputs.hash_zip }}\`
+
+          > **发布说明**：已同步归档至内部代码仓库，并正式上架至公开仓库 [Fuck_ets100_pc](https://github.com/${{ env.PUBLIC_RELEASE_REPOSITORY }}/releases/tag/${{ steps.meta.outputs.public_tag }})。
+          "@
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $Summary

@@ -1,0 +1,8 @@
+1) Please check the following approach to easily include the protection macro markers in Rust:
+
+github.com/windows-fryer/wednesday-oxidize
+
+2)You can find a usage example at:
+
+github.com/windows-fryer/wednesday-oxidize/blob/trunk/cs2/src/main.rs
+

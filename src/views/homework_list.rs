@@ -1,3 +1,10 @@
+// =========================================================================================
+// ⚠️ 作业列表排版规范：
+// 1. 卡片底部的操作按钮组严禁使用 `ui.wrap` 配合 `ui.accent_button` / `ui.button`，
+//    否则上游 FluentButton 会因 `raw_w.min(avail_w)` 导致行尾按钮被挤压为几十像素，文字截断！
+// 2. 统一使用 `responsive_flow` + `accent_action_btn` / `action_btn` / `subtle_action_btn`。
+// =========================================================================================
+
 use eframe::egui::{self, Color32, RichText};
 use fluent_egui::winui::prelude::*;
 use fluent_egui::winui::InfoBarKind;
@@ -6,7 +13,9 @@ use crate::cloud_client::CloudClient;
 use crate::models::{HomeworkCategory, HomeworkItem, HomeworkSource};
 use crate::state::{AnswerViewMode, AppState, NavTab};
 use crate::utils::exporter::Exporter;
-use crate::views::render_header;
+use crate::views::{
+    accent_action_btn, action_btn, choice_btn, render_header, responsive_flow, subtle_action_btn,
+};
 
 fn switch_category(state: &mut AppState, cat: HomeworkCategory) {
     state.selected_category = cat;
@@ -77,7 +86,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     // 状态统计与分类筛选操作栏 (采用 ui.wrap 动态自适应流式排版：全屏宽屏展开为一行，窄屏自动折行无溢出)
     ui.card("作业控制台", "分类筛选与快速操作", |ui| {
-        ui.wrap(|ui| {
+        responsive_flow(ui, |ui| {
             ui.label(RichText::new("分类:").strong());
             egui::ComboBox::from_id_salt("homework_category_dropdown")
                 .selected_text(match state.selected_category {
@@ -104,7 +113,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
             ui.separator();
 
-            ui.text_box_hint(&mut state.search_filter, "🔍 搜索试卷或 ID...");
+            ui.add(egui::TextEdit::singleline(&mut state.search_filter).hint_text("🔍 搜索试卷或 ID...").desired_width(180.0));
 
             ui.separator();
 
@@ -112,18 +121,18 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
             for (key, label) in [("all", "全部"), ("pending", "未完成"), ("completed", "已完成")] {
                 let is_sel = state.selected_status_filter == key;
-                if ui.button(if is_sel { format!("● {}", label) } else { label.to_string() }).clicked() {
+                if choice_btn(ui, label, is_sel, state.theme_config.accent).clicked() {
                     state.selected_status_filter = key.to_string();
                 }
             }
 
             ui.separator();
 
-            if ui.button("🔄 刷新列表").clicked() {
+            if action_btn(ui, "🔄 刷新列表").clicked() {
                 refresh_current_category(state);
             }
 
-            if ui.button("📁 扫描本地").clicked() {
+            if action_btn(ui, "📁 扫描本地").clicked() {
                 state.current_tab = NavTab::LocalScan;
             }
         });
@@ -178,7 +187,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         HomeworkCategory::Local => "本地已扫描试卷",
     };
 
-    ui.row(|ui| {
+    responsive_flow(ui, |ui| {
         ui.heading(RichText::new(format!("{} (共 {} 份)", category_title, display_items.len())).strong().size(18.0));
         if state.selected_category == HomeworkCategory::VocabPk {
             ui.label(RichText::new("🔥 4级回退链路保护中").size(12.0).color(Color32::from_rgb(255, 120, 0)));
@@ -189,10 +198,14 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     if display_items.is_empty() {
         ui.card("暂无匹配作业", "未找到符合当前筛选条件的试卷", |ui| {
             ui.label("当前分类或筛选条件下暂无作业。您可以点击上方的【🔄 刷新列表】拉取最新列表，或切换不同的分类标签。");
-            if !state.session.is_logged_in
-                && ui.accent_button("🔑 立即登录云端账号").clicked() {
-                    state.current_tab = NavTab::CloudAccount;
-                }
+            if !state.session.is_logged_in {
+                ui.add_space(4.0);
+                responsive_flow(ui, |ui| {
+                    if accent_action_btn(ui, "🔑 立即登录云端账号", None).clicked() {
+                        state.current_tab = NavTab::CloudAccount;
+                    }
+                });
+            }
         });
         return;
     }
@@ -232,8 +245,8 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 ui.add_space(2.0);
             }
 
-            ui.wrap(|ui| {
-                if ui.accent_button("📖 查看答案").clicked() {
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "📖 查看答案", None).clicked() {
                     state.selected_homework = Some(hw.clone());
                     state.answer_view_mode = AnswerViewMode::Detailed;
                     // 如果是云端作业且未下载解析，触发下载 / 回退解析
@@ -249,7 +262,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     }
                 }
 
-                if ui.button("⚡ 极简答案").clicked() {
+                if action_btn(ui, "⚡ 极简答案").clicked() {
                     state.selected_homework = Some(hw.clone());
                     state.answer_view_mode = AnswerViewMode::Concise;
                     if is_cloud && !hw.is_parsed()
@@ -258,12 +271,12 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         }
                 }
 
-                if ui.button("🚀 自动做题").clicked() {
+                if action_btn(ui, "🚀 自动做题").clicked() {
                     state.auto_selected_hw_id = Some(hw.id.clone());
                     state.current_tab = NavTab::AutoComplete;
                 }
 
-                if ui.subtle_button("📋 复制全部答案").clicked() {
+                if subtle_action_btn(ui, "📋 复制全部答案").clicked() {
                     let hw_to_copy = if is_cloud && !hw.is_parsed() {
                         CloudClient::download_and_parse_homework(&state.session, hw).unwrap_or_else(|_| hw.clone())
                     } else {

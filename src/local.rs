@@ -12,27 +12,55 @@ use crate::models::{
 pub struct LocalScanner;
 
 impl LocalScanner {
-    /// 查找系统 AppData 下所有匹配 74656D705F74656D705F74656D705F* 的目录
+    /// 查找系统 AppData 下所有匹配 74656D705F74656D705F74656D705F* 的目录以及 ETS 目录
     pub fn find_ets_local_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         if let Ok(appdata) = std::env::var("APPDATA") {
             let appdata_path = PathBuf::from(appdata);
+
+            // 1. 显式检测 %APPDATA%/ETS 与 %APPDATA%/74656D705F 目录
+            let ets_dir = appdata_path.join("ETS");
+            if ets_dir.is_dir() {
+                dirs.push(ets_dir);
+            }
+            let hex_temp_dir = appdata_path.join("74656D705F");
+            if hex_temp_dir.is_dir() && !dirs.iter().any(|d| d == &hex_temp_dir) {
+                dirs.push(hex_temp_dir);
+            }
+
+            // 2. 遍历查找匹配 74656D705F* 或大小写不敏感 ETS 的目录
             if let Ok(entries) = fs::read_dir(&appdata_path) {
                 for entry in entries.flatten() {
                     let file_name = entry.file_name().to_string_lossy().to_string();
-                    if file_name.starts_with("74656D705F74656D705F74656D705F")
-                        && entry.path().is_dir()
-                    {
-                        dirs.push(entry.path());
+                    let is_match = file_name.starts_with("74656D705F")
+                        || file_name.eq_ignore_ascii_case("ETS");
+                    if is_match && entry.path().is_dir() {
+                        let path = entry.path();
+                        if !dirs.iter().any(|d| d == &path) {
+                            dirs.push(path);
+                        }
                     }
                 }
             }
         }
-        // 按修改时间从新到旧排序
+
+        // 优先将包含实际作业数据的目录排在前面，其次按修改时间从新到旧排序
         dirs.sort_by(|a, b| {
-            let time_a = fs::metadata(a).and_then(|m| m.modified()).ok();
-            let time_b = fs::metadata(b).and_then(|m| m.modified()).ok();
-            time_b.cmp(&time_a)
+            let has_hw_a = fs::read_dir(a)
+                .map(|mut it| it.any(|e| e.map(|entry| entry.path().is_dir() && !matches!(entry.file_name().to_str(), Some("common" | "system" | "clear_cache" | "pc_xst_dict"))).unwrap_or(false)))
+                .unwrap_or(false);
+            let has_hw_b = fs::read_dir(b)
+                .map(|mut it| it.any(|e| e.map(|entry| entry.path().is_dir() && !matches!(entry.file_name().to_str(), Some("common" | "system" | "clear_cache" | "pc_xst_dict"))).unwrap_or(false)))
+                .unwrap_or(false);
+
+            match has_hw_b.cmp(&has_hw_a) {
+                std::cmp::Ordering::Equal => {
+                    let time_a = fs::metadata(a).and_then(|m| m.modified()).ok();
+                    let time_b = fs::metadata(b).and_then(|m| m.modified()).ok();
+                    time_b.cmp(&time_a)
+                }
+                other => other,
+            }
         });
         dirs
     }
@@ -108,7 +136,12 @@ impl LocalScanner {
                 }
                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 // 过滤已知非作业目录
-                if name == "common" || name == "system" || name.starts_with('.') {
+                if name == "common"
+                    || name == "system"
+                    || name == "clear_cache"
+                    || name == "pc_xst_dict"
+                    || name.starts_with('.')
+                {
                     continue;
                 }
 
@@ -321,6 +354,9 @@ impl LocalScanner {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let word_id = raw_q.get("word_id").and_then(|v| v.as_i64());
+                let question_id = raw_q.get("question_id").and_then(|v| v.as_i64());
+
                 questions.push(ParsedQuestion {
                     index: question_counter - 1,
                     number: no,
@@ -330,6 +366,8 @@ impl LocalScanner {
                     important_points,
                     audio_file,
                     options,
+                    word_id,
+                    question_id,
                 });
             }
 

@@ -1,10 +1,19 @@
+// =========================================================================================
+// ⚠️ 本地扫描视图排版规范：
+// 1. 本地目录路径（dir_str）通常非常冗长，严禁直接塞入未截断的按钮中，必须使用 `truncate_middle(&dir_str, 42)`
+//    并在 `.on_hover_text(&dir_str)` 中展示完整路径。
+// 2. 所有操作按钮严禁使用 `ui.row` + `FluentButton`，统一使用 `responsive_flow` + `action_btn` / `accent_action_btn`。
+// =========================================================================================
+
 use eframe::egui::{Color32, RichText};
 use fluent_egui::winui::prelude::*;
 use fluent_egui::winui::InfoBarKind;
 
 use crate::local::LocalScanner;
 use crate::state::{AnswerViewMode, AppState, NavTab};
-use crate::views::render_header;
+use crate::views::{
+    accent_action_btn, action_btn, choice_btn, render_header, responsive_flow, truncate_middle,
+};
 
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     render_header(ui, "本地试卷扫描", "直接读取 PC 端官方 e听说客户端下载在本地的作业与试卷数据");
@@ -20,16 +29,23 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     ui.card("本地客户端检测状态", "自动嗅探本地数据目录与已保存账号", |ui| {
         if state.local_ets_dirs.is_empty() {
-            ui.label(RichText::new("⚠️ 未在 %APPDATA% 目录下检测到官方客户端数据目录 (74656D705F...)").color(Color32::from_rgb(255, 160, 0)));
+            ui.label(RichText::new("⚠️ 未在 %APPDATA% 目录下检测到官方客户端数据目录 (74656D705F... 或 ETS)").color(Color32::from_rgb(255, 160, 0)));
         } else {
             ui.label(RichText::new(format!("✔ 已成功检测到 {} 个本地客户端数据目录", state.local_ets_dirs.len())).color(Color32::from_rgb(76, 175, 80)).strong());
             
             for dir in &state.local_ets_dirs {
                 let is_selected = state.selected_local_dir.as_ref() == Some(dir);
                 let dir_str = dir.to_string_lossy().to_string();
-                
-                ui.row(|ui| {
-                    if ui.button(if is_selected { format!("● 当前使用: {}", dir_str) } else { format!("切换目录: {}", dir_str) }).clicked() {
+                let short_dir = truncate_middle(&dir_str, 42);
+                let label = if is_selected {
+                    format!("● 当前使用: {}", short_dir)
+                } else {
+                    format!("切换目录: {}", short_dir)
+                };
+
+                responsive_flow(ui, |ui| {
+                    let btn_resp = choice_btn(ui, &label, is_selected, None);
+                    if btn_resp.on_hover_text(&dir_str).clicked() {
                         state.selected_local_dir = Some(dir.clone());
                         state.local_items = LocalScanner::scan_homeworks(dir);
                         state.notification = Some((format!("已重新扫描本地目录: {}", dir_str), InfoBarKind::Success));
@@ -61,8 +77,8 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
         ui.separator();
 
-        ui.row(|ui| {
-            if ui.button("🔄 重新扫描默认路径").clicked() {
+        responsive_flow(ui, |ui| {
+            if action_btn(ui, "🔄 重新扫描默认路径").clicked() {
                 state.local_ets_dirs = LocalScanner::find_ets_local_dirs();
                 if let Some(first) = state.local_ets_dirs.first() {
                     state.selected_local_dir = Some(first.clone());
@@ -71,7 +87,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 }
             }
 
-            if ui.accent_button("📂 选择其他自定义目录").clicked()
+            if accent_action_btn(ui, "📂 选择其他自定义目录", None).clicked()
                 && let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     state.selected_local_dir = Some(folder.clone());
                     state.local_items = LocalScanner::scan_homeworks(&folder);
@@ -102,20 +118,20 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         );
 
         ui.card(&hw.name, &subtitle, |ui| {
-            ui.row(|ui| {
-                if ui.accent_button("📖 查看完整答案").clicked() {
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "📖 查看完整答案", None).clicked() {
                     state.selected_homework = Some(hw_clone.clone());
                     state.answer_view_mode = AnswerViewMode::Detailed;
                     state.current_tab = NavTab::HomeworkList;
                 }
 
-                if ui.button("⚡ 极简速查").clicked() {
+                if action_btn(ui, "⚡ 极简速查").clicked() {
                     state.selected_homework = Some(hw_clone.clone());
                     state.answer_view_mode = AnswerViewMode::Concise;
                     state.current_tab = NavTab::HomeworkList;
                 }
 
-                if ui.button("🚀 自动做题").clicked() {
+                if action_btn(ui, "🚀 自动做题").clicked() {
                     state.auto_selected_hw_id = Some(hw_clone.id.clone());
                     state.current_tab = NavTab::AutoComplete;
                 }

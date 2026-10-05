@@ -1,3 +1,10 @@
+// =========================================================================================
+// ⚠️ 云端账号中心排版规范：
+// 1. 顶部模式切换、操作按钮、设备列表与弹窗表单统一使用 `responsive_flow`，
+//    杜绝硬编码 `ui.row` 导致的右侧卡片边距丢失或窗口挤出。
+// 2. 按钮统一使用 `choice_btn` / `action_btn` / `accent_action_btn` / `danger_action_btn`。
+// =========================================================================================
+
 use eframe::egui::{Color32, RichText};
 use fluent_egui::winui::prelude::*;
 use fluent_egui::winui::InfoBarKind;
@@ -6,7 +13,9 @@ use crate::cloud_client::CloudClient;
 use crate::la_client::LaClient;
 use crate::models::UserSession;
 use crate::state::AppState;
-use crate::views::render_header;
+use crate::views::{
+    accent_action_btn, action_btn, choice_btn, danger_action_btn, render_header, responsive_flow,
+};
 
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     render_header(
@@ -16,19 +25,15 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     );
 
     // 模式切换分栏选择
-    ui.row(|ui| {
+    responsive_flow(ui, |ui| {
         let is_la_tab = state.la_active_tab == 0;
         let is_ets_tab = state.la_active_tab == 1;
 
-        if is_la_tab {
-            let _ = ui.accent_button("✨ LA Studio 会员与云端托管 (推荐)");
-        } else if ui.button("✨ LA Studio 会员与云端托管 (推荐)").clicked() {
+        if choice_btn(ui, "✨ LA Studio 会员与云端托管 (推荐)", is_la_tab, state.theme_config.accent).clicked() {
             state.la_active_tab = 0;
         }
 
-        if is_ets_tab {
-            let _ = ui.accent_button("📱 ETS100 官方直连模式");
-        } else if ui.button("📱 ETS100 官方直连模式").clicked() {
+        if choice_btn(ui, "📱 ETS100 官方直连模式", is_ets_tab, state.theme_config.accent).clicked() {
             state.la_active_tab = 1;
         }
     });
@@ -56,7 +61,7 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
     if let Some(ref la_sess) = state.la_session.clone() {
         // 已登录 LA 账号
         ui.card("LA Studio 会员中心", "已连接至 LA Studio 云端认证服务", |ui| {
-            ui.row(|ui| {
+            responsive_flow(ui, |ui| {
                 ui.label(RichText::new(format!("👤 用户名: {}", la_sess.user.username)).strong().size(16.0));
                 let tier_text = la_sess.user.tier_display_name();
                 let tier_color = match la_sess.user.tier.to_lowercase().as_str() {
@@ -76,16 +81,17 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
 
             ui.separator();
 
-            ui.row(|ui| {
-                if ui.button("🚪 退出登录").clicked() {
+            responsive_flow(ui, |ui| {
+                if danger_action_btn(ui, "🚪 退出登录").clicked() {
                     LaClient::logout(&la_sess.access_token);
                     state.la_session = None;
                     state.la_cloud_session = None;
                     state.la_devices.clear();
+                    state.la_account_sessions.clear();
                     state.notification = Some(("已退出 LA Studio 账号".to_string(), InfoBarKind::Informational));
                 }
 
-                if ui.button("🔄 刷新设备列表").clicked() {
+                if action_btn(ui, "🔄 刷新设备列表").clicked() {
                     match LaClient::list_devices(&la_sess.access_token) {
                         Ok(devs) => {
                             state.la_devices = devs;
@@ -96,8 +102,184 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                         }
                     }
                 }
+
+                let pw_label = if state.change_password_dialog_open { "✖ 关闭修改密码" } else { "🔑 修改密码" };
+                if action_btn(ui, pw_label).clicked() {
+                    state.change_password_dialog_open = !state.change_password_dialog_open;
+                }
+
+                if action_btn(ui, "💻 刷新在线会话").clicked() {
+                    match LaClient::list_sessions(&la_sess.access_token) {
+                        Ok(sessions) => {
+                            state.la_account_sessions = sessions;
+                            state.notification = Some(("在线会话列表已刷新".to_string(), InfoBarKind::Success));
+                        }
+                        Err(e) => {
+                            state.notification = Some((format!("获取会话列表失败: {e}"), InfoBarKind::Error));
+                        }
+                    }
+                }
             });
         });
+
+        // 修改密码卡片
+        if state.change_password_dialog_open {
+            ui.add_space(8.0);
+            ui.card("修改账号密码", "更新您的 LA Studio 账号登录密码", |ui| {
+                ui.label("原密码:");
+                ui.password_box(&mut state.change_password_old_input);
+                ui.add_space(4.0);
+                ui.label("新密码:");
+                ui.password_box(&mut state.change_password_new_input);
+                ui.add_space(4.0);
+                ui.label("确认新密码:");
+                ui.password_box(&mut state.change_password_confirm_input);
+                ui.add_space(6.0);
+
+                responsive_flow(ui, |ui| {
+                    if accent_action_btn(ui, "✔ 确认修改密码", None).clicked() {
+                        let old = state.change_password_old_input.trim();
+                        let new = state.change_password_new_input.trim();
+                        let confirm = state.change_password_confirm_input.trim();
+
+                        if old.is_empty() || new.is_empty() {
+                            state.notification = Some(("原密码和新密码不能为空".to_string(), InfoBarKind::Warning));
+                        } else if new != confirm {
+                            state.notification = Some(("两次输入的新密码不一致".to_string(), InfoBarKind::Warning));
+                        } else if new.len() < 6 {
+                            state.notification = Some(("新密码长度至少需要 6 位".to_string(), InfoBarKind::Warning));
+                        } else {
+                            match LaClient::change_password(&la_sess.access_token, old, new) {
+                                Ok(_) => {
+                                    state.change_password_old_input.clear();
+                                    state.change_password_new_input.clear();
+                                    state.change_password_confirm_input.clear();
+                                    state.change_password_dialog_open = false;
+                                    state.notification = Some(("密码修改成功！".to_string(), InfoBarKind::Success));
+                                }
+                                Err(e) => {
+                                    state.notification = Some((format!("修改密码失败: {e}"), InfoBarKind::Error));
+                                }
+                            }
+                        }
+                    }
+
+                    if action_btn(ui, "取消").clicked() {
+                        state.change_password_dialog_open = false;
+                    }
+                });
+            });
+        }
+
+        // 在线会话列表卡片
+        if !state.la_account_sessions.is_empty() {
+            ui.add_space(8.0);
+            ui.card("在线会话管理", "管理当前账号在各设备上的活跃会话，支持远程强制下线", |ui| {
+                let sessions = state.la_account_sessions.clone();
+                let count = sessions.len();
+                for (idx, sess) in sessions.into_iter().enumerate() {
+                    let is_current = sess.is_current || sess.id == la_sess.session_id;
+                    let icon = match sess.client_key.as_str() {
+                        "fepc-windows" => "💻",
+                        "fe-android" => "📱",
+                        "web" => "🌐",
+                        _ => "🖥",
+                    };
+                    let client_name = match sess.client_key.as_str() {
+                        "fepc-windows" => "Fe PC 桌面端",
+                        "fe-android" => "Fe Android 客户端",
+                        "web" => "Web 网页端",
+                        k if !k.is_empty() => k,
+                        _ => "未知终端",
+                    };
+                    let dev_name = if !sess.device_name.is_empty() {
+                        sess.device_name.as_str()
+                    } else {
+                        client_name
+                    };
+
+                    let avail_w = ui.available_width();
+                    if avail_w < 480.0 {
+                        responsive_flow(ui, |ui| {
+                            let cur_badge = if is_current { " [当前会话]" } else { "" };
+                            ui.label(RichText::new(format!("{icon} {dev_name}{cur_badge}")).strong().size(13.5));
+                        });
+                        ui.add_space(2.0);
+                        responsive_flow(ui, |ui| {
+                            if !is_current {
+                                let sess_id = sess.id.clone();
+                                if danger_action_btn(ui, "下线会话").clicked() {
+                                    match LaClient::revoke_session(&la_sess.access_token, &sess_id) {
+                                        Ok(_) => {
+                                            state.la_account_sessions.retain(|s| s.id != sess_id);
+                                            state.notification = Some(("已成功下线该会话".to_string(), InfoBarKind::Success));
+                                        }
+                                        Err(e) => {
+                                            state.notification = Some((format!("下线会话失败: {e}"), InfoBarKind::Error));
+                                        }
+                                    }
+                                }
+                            } else {
+                                ui.label(
+                                    RichText::new("🟢 当前活跃")
+                                        .size(11.5)
+                                        .color(Color32::from_rgb(76, 175, 80))
+                                        .strong(),
+                                );
+                            }
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            let cur_badge = if is_current { " [当前会话]" } else { "" };
+                            ui.label(RichText::new(format!("{icon} {dev_name}{cur_badge}")).strong().size(13.5));
+
+                            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                                if !is_current {
+                                    let sess_id = sess.id.clone();
+                                    if danger_action_btn(ui, "下线会话").clicked() {
+                                        match LaClient::revoke_session(&la_sess.access_token, &sess_id) {
+                                            Ok(_) => {
+                                                state.la_account_sessions.retain(|s| s.id != sess_id);
+                                                state.notification = Some(("已成功下线该会话".to_string(), InfoBarKind::Success));
+                                            }
+                                            Err(e) => {
+                                                state.notification = Some((format!("下线会话失败: {e}"), InfoBarKind::Error));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    ui.label(
+                                        RichText::new("🟢 当前活跃")
+                                            .size(11.5)
+                                            .color(Color32::from_rgb(76, 175, 80))
+                                            .strong(),
+                                    );
+                                }
+                            });
+                        });
+                    }
+
+                    ui.add_space(2.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.label(RichText::new(format!("会话: {}", sess.id)).size(11.5).color(Color32::from_gray(160)));
+                        ui.label(RichText::new(format!("客户端: {client_name}")).size(11.5).color(Color32::from_gray(160)));
+                        if let Some(ref ip) = sess.ip {
+                            ui.label(RichText::new(format!("IP: {ip}")).size(11.5).color(Color32::from_gray(140)));
+                        }
+                        if let Some(ref active) = sess.last_active_at {
+                            ui.label(RichText::new(format!("活跃: {active}")).size(11.5).color(Color32::from_gray(140)));
+                        }
+                    });
+
+                    if idx + 1 < count {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                    }
+                }
+            });
+        }
 
         ui.add_space(8.0);
 
@@ -112,8 +294,8 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                 ui.label(RichText::new("⚪ 尚未激活云端 ETS100 会话").color(Color32::from_rgb(180, 180, 180)));
             }
 
-            ui.row(|ui| {
-                if ui.accent_button("🚀 一键激活 / 刷新云端 ETS100 会话").clicked() {
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "🚀 一键激活 / 刷新云端 ETS100 会话", None).clicked() {
                     match LaClient::get_cloud_session(&la_sess.access_token, "") {
                         Ok(cloud) => {
                             state.session = UserSession {
@@ -151,8 +333,8 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
             ui.password_box(&mut state.la_bind_password_input);
             ui.add_space(8.0);
 
-            ui.row(|ui| {
-                if ui.accent_button("🔗 关联此 ETS 账号并拉取凭据").clicked() {
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "🔗 关联此 ETS 账号并拉取凭据", None).clicked() {
                     let phone = state.la_bind_phone_input.trim();
                     let pwd = state.la_bind_password_input.trim();
 
@@ -196,31 +378,206 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
             });
         });
 
+        ui.add_space(8.0);
+
+        // 畅言 (科大讯飞) 账号绑定与托管卡片
+        ui.card("关联畅言账号至 LA 云端", "输入畅言 User ID (UID) 与 SUC Token，由 LA Studio 云端安全托管做题凭据", |ui| {
+            ui.label("输入在网页端畅言登录获取的 User ID (UID) 与 SUC Token (suc_user_token)：");
+            ui.add_space(4.0);
+            ui.text_box_hint(&mut state.changyan_uid_input, "畅言 User ID (UID)");
+            ui.add_space(4.0);
+            ui.text_box_hint(&mut state.changyan_token_input, "畅言 SUC Token (suc_user_token)");
+            ui.add_space(8.0);
+
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "🔗 关联此畅言账号并拉取凭据", None).clicked() {
+                    let uid = state.changyan_uid_input.trim();
+                    let token = state.changyan_token_input.trim();
+
+                    if uid.is_empty() || token.is_empty() {
+                        state.notification = Some(("UID 和 SUC Token 不能为空".to_string(), InfoBarKind::Warning));
+                        return;
+                    }
+
+                    match LaClient::bind_changyan_account(&la_sess.access_token, uid, uid, token, "") {
+                        Ok(cloud) => {
+                            state.changyan_token_input.clear();
+                            state.changyan_bind_dialog_open = false;
+
+                            state.session = UserSession {
+                                phone: cloud.account_display.clone(),
+                                token: cloud.token.clone(),
+                                device_code: cloud.device_code.clone(),
+                                parent_account_id: cloud.parent_account_id.clone(),
+                                user_name: cloud.account_display.clone(),
+                                is_logged_in: true,
+                            };
+                            state.la_cloud_session = Some(cloud);
+                            state.notification = Some(("云端畅言做题凭据同步成功！正在加载作业列表...".to_string(), InfoBarKind::Success));
+                            if let Ok(hw_list) = CloudClient::get_homework_list(&state.session, "1") {
+                                state.homework_items = hw_list;
+                            }
+                        }
+                        Err(e) => {
+                            state.notification = Some((format!("关联畅言账号失败: {e}"), InfoBarKind::Error));
+                        }
+                    }
+                }
+
+                if action_btn(ui, "🌐 前往畅言网页登录").clicked() {
+                    let changyan_url = "https://pass.changyan.com/login?nextpage=https%3A%2F%2Fwww.ets100.com%2FloginCheck.html&customConfig=aW4iLHByb2R1Y3RfYXBwa2V5OiJxaW5nZGFvX2V0cyIsIm5lZWRUaWNrZXQiOiJ0cnVlIiwibG9naW5fbm90QXV0byI6InRydWUifQ&from=ew&appId=pass6port18";
+                    let _ = open::that(changyan_url);
+                    state.notification = Some(("已在浏览器中拉起畅言登录页面".to_string(), InfoBarKind::Informational));
+                }
+            });
+        });
+
         // 设备管理卡片
         if !state.la_devices.is_empty() {
             ui.add_space(8.0);
             ui.card("已绑定的授权设备", "管理您在 LA Studio 登录过的终端设备", |ui| {
-                for dev in state.la_devices.clone() {
-                    ui.row(|ui| {
-                        let cur_tag = if dev.is_current { " [当前设备]" } else { "" };
-                        ui.label(RichText::new(format!("📱 {}{}", dev.device_name, cur_tag)).strong());
-                        ui.label(format!("系统: {}", dev.platform_version));
-                        ui.label(format!("客户端: {}", dev.client_key));
+                let devices = state.la_devices.clone();
+                let count = devices.len();
+                for (idx, dev) in devices.into_iter().enumerate() {
+                    let (friendly_name, icon) = format_friendly_device_name(&dev);
+                    let is_current = dev.is_current;
+                    let dev_id = dev.id;
 
-                        if !dev.is_current
-                            && ui.button("解除授权").clicked() {
-                                match LaClient::revoke_device(&la_sess.access_token, dev.id) {
-                                    Ok(_) => {
-                                        state.la_devices.retain(|d| d.id != dev.id);
-                                        state.notification = Some(("设备已成功解绑".to_string(), InfoBarKind::Success));
-                                    }
-                                    Err(e) => {
-                                        state.notification = Some((format!("解绑失败: {e}"), InfoBarKind::Error));
+                    // 1. 标题与操作按钮行：宽屏两端对齐，窄屏自适应折行
+                    let avail_w = ui.available_width();
+                    if avail_w < 480.0 {
+                        responsive_flow(ui, |ui| {
+                            let cur_badge = if is_current { " [当前设备]" } else { "" };
+                            let resp = ui.label(
+                                RichText::new(format!("{icon} {friendly_name}{cur_badge}"))
+                                    .strong()
+                                    .size(13.5),
+                            );
+                            if friendly_name != dev.device_name {
+                                resp.on_hover_text(format!("原始设备完整标识:\n{}", dev.device_name));
+                            }
+                        });
+                        ui.add_space(2.0);
+                        responsive_flow(ui, |ui| {
+                            if !is_current {
+                                if danger_action_btn(ui, "解除授权").clicked() {
+                                    match LaClient::revoke_device(&la_sess.access_token, dev_id) {
+                                        Ok(_) => {
+                                            state.la_devices.retain(|d| d.id != dev_id);
+                                            state.notification = Some(("设备已成功解绑".to_string(), InfoBarKind::Success));
+                                        }
+                                        Err(e) => {
+                                            state.notification = Some((format!("解绑失败: {e}"), InfoBarKind::Error));
+                                        }
                                     }
                                 }
+                            } else {
+                                ui.label(
+                                    RichText::new("🟢 本机终端")
+                                        .size(11.5)
+                                        .color(Color32::from_rgb(76, 175, 80))
+                                        .strong(),
+                                );
                             }
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            let cur_badge = if is_current { " [当前设备]" } else { "" };
+                            let resp = ui.label(
+                                RichText::new(format!("{icon} {friendly_name}{cur_badge}"))
+                                    .strong()
+                                    .size(13.5),
+                            );
+                            if friendly_name != dev.device_name {
+                                resp.on_hover_text(format!("原始设备完整标识:\n{}", dev.device_name));
+                            }
+
+                            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                                if !is_current {
+                                    if danger_action_btn(ui, "解除授权").clicked() {
+                                        match LaClient::revoke_device(&la_sess.access_token, dev_id) {
+                                            Ok(_) => {
+                                                state.la_devices.retain(|d| d.id != dev_id);
+                                                state.notification = Some(("设备已成功解绑".to_string(), InfoBarKind::Success));
+                                            }
+                                            Err(e) => {
+                                                state.notification = Some((format!("解绑失败: {e}"), InfoBarKind::Error));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    ui.label(
+                                        RichText::new("🟢 本机终端")
+                                            .size(11.5)
+                                            .color(Color32::from_rgb(76, 175, 80))
+                                            .strong(),
+                                    );
+                                }
+                            });
+                        });
+                    }
+
+                    ui.add_space(2.0);
+
+                    let is_windows = dev.is_current
+                        || dev.platform_version.to_lowercase().contains("windows")
+                        || dev.device_name.starts_with("PC-")
+                        || dev.device_name.to_uppercase().contains("DESKTOP")
+                        || dev.device_name.to_uppercase().contains("LAPTOP")
+                        || dev.device_name.to_uppercase().contains("WORKSTATION");
+
+                    // 2. 设备元数据信息行：自动换行（horizontal_wrapped），绝不横向溢出
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        if !dev.platform_version.is_empty() {
+                            let plat_display = if is_windows && dev.platform_version.contains("Android") {
+                                "Windows 11 / 10"
+                            } else {
+                                dev.platform_version.as_str()
+                            };
+                            ui.label(
+                                RichText::new(format!("系统: {plat_display}"))
+                                    .size(11.5)
+                                    .color(Color32::from_gray(160)),
+                            );
+                        }
+                        if !dev.client_key.is_empty() {
+                            let client_display = match dev.client_key.as_str() {
+                                "fepc-windows" => "Fe PC 桌面端",
+                                "fe-android" => "Fe Android",
+                                "web" => "Web 网页端",
+                                k => k,
+                            };
+                            ui.label(
+                                RichText::new(format!("客户端: {client_display}"))
+                                    .size(11.5)
+                                    .color(Color32::from_gray(160)),
+                            );
+                        }
+                        if let Some(ref active_time) = dev.last_active_at
+                            && !active_time.trim().is_empty()
+                        {
+                            ui.label(
+                                RichText::new(format!("活跃时间: {active_time}"))
+                                    .size(11.5)
+                                    .color(Color32::from_gray(140)),
+                            );
+                        }
+                        if friendly_name != dev.device_name {
+                            ui.label(
+                                RichText::new("ℹ 鼠标悬浮名称查看完整UA")
+                                    .size(10.5)
+                                    .color(Color32::from_rgb(0, 150, 220)),
+                            )
+                            .on_hover_text(format!("原始设备完整标识:\n{}", dev.device_name));
+                        }
                     });
-                    ui.separator();
+
+                    if idx + 1 < count {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                    }
                 }
             });
         }
@@ -232,8 +589,8 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
             ui.password_box(&mut state.la_password_input);
             ui.add_space(8.0);
 
-            ui.row(|ui| {
-                if ui.accent_button("🔑 登录 LA 账号").clicked() {
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "🔑 登录 LA 账号", None).clicked() {
                     let u = state.la_username_input.trim();
                     let p = &state.la_password_input;
 
@@ -304,8 +661,8 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
             ui.card("🛡️ 人机安全验证", "服务端要求完成人机安全验证", |ui| {
                 ui.label(RichText::new("服务端要求进行安全验证。完成验证后，桌面端将自动恢复并登录：").color(Color32::from_rgb(255, 180, 0)));
                 ui.add_space(4.0);
-                ui.row(|ui| {
-                    if ui.accent_button("🌐 在默认浏览器中打开验证页面").clicked() {
+                responsive_flow(ui, |ui| {
+                    if accent_action_btn(ui, "🌐 在默认浏览器中打开验证页面", None).clicked() {
                         if state.captcha_server.is_none() {
                             if let Ok(srv) = crate::utils::captcha_server::CaptchaServer::start() {
                                 let port = srv.port();
@@ -323,9 +680,9 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                 ui.add_space(6.0);
                 ui.separator();
                 ui.label("或手动粘贴已获取的验证 Token 登录：");
-                ui.row(|ui| {
-                    ui.text_box_hint(&mut state.la_captcha_token, "粘贴 cap_token");
-                    if ui.button("带 Token 登录").clicked() {
+                responsive_flow(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut state.la_captcha_token).hint_text("粘贴 cap_token").desired_width(180.0));
+                    if action_btn(ui, "带 Token 登录").clicked() {
                         let u = state.la_username_input.trim();
                         let p = &state.la_password_input;
                         let token = state.la_captcha_token.trim();
@@ -386,8 +743,8 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
 
             ui.separator();
 
-            ui.row(|ui| {
-                if ui.button("🚪 退出当前登录").clicked() {
+            responsive_flow(ui, |ui| {
+                if danger_action_btn(ui, "🚪 退出当前登录").clicked() {
                     CloudClient::clear_session();
                     state.session = Default::default();
                     state.login_password.clear();
@@ -413,8 +770,8 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
 
         ui.add_space(8.0);
 
-        ui.row(|ui| {
-            if ui.accent_button("🔑 立即登录").clicked() {
+        responsive_flow(ui, |ui| {
+            if accent_action_btn(ui, "🔑 立即登录", None).clicked() {
                 let phone = state.session.phone.trim();
                 let dev_code = state.session.device_code.trim();
 
@@ -450,10 +807,14 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
                 }
             }
 
-            if ui.button("🌐 畅言网页统一登录").clicked() {
+            if action_btn(ui, "🌐 畅言网页统一登录").clicked() {
                 let changyan_url = "https://pass.changyan.com/login?nextpage=https%3A%2F%2Fwww.ets100.com%2FloginCheck.html&customConfig=aW4iLHByb2R1Y3RfYXBwa2V5OiJxaW5nZGFvX2V0cyIsIm5lZWRUaWNrZXQiOiJ0cnVlIiwibG9naW5fbm90QXV0byI6InRydWUifQ&from=ew&appId=pass6port18";
                 let _ = open::that(changyan_url);
                 state.notification = Some(("已在浏览器中拉起畅言登录页面".to_string(), InfoBarKind::Informational));
+            }
+
+            if action_btn(ui, "🔗 绑定畅言账号 (UID/Token)").clicked() {
+                state.changyan_bind_dialog_open = true;
             }
         });
     });
@@ -464,8 +825,8 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
             ui.label(format!("目标手机号: {}", state.session.phone));
             ui.text_box_hint(&mut state.rebind_code_input, "输入收到的 6 位短信验证码");
 
-            ui.row(|ui| {
-                if ui.button("📩 获取/重发验证码").clicked() {
+            responsive_flow(ui, |ui| {
+                if action_btn(ui, "📩 获取/重发验证码").clicked() {
                     match CloudClient::send_rebind_code(&state.session.phone) {
                         Ok(_) => {
                             state.notification = Some(("验证码已发送至您的手机，请查收".to_string(), InfoBarKind::Informational));
@@ -476,7 +837,7 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
                     }
                 }
 
-                if ui.accent_button("✔ 确认换绑并登录").clicked() {
+                if accent_action_btn(ui, "✔ 确认换绑并登录", None).clicked() {
                     let code = state.rebind_code_input.trim();
                     if code.is_empty() {
                         state.notification = Some(("请输入验证码".to_string(), InfoBarKind::Warning));
@@ -504,10 +865,148 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
                     }
                 }
 
-                if ui.button("取消").clicked() {
+                if action_btn(ui, "取消").clicked() {
                     state.rebind_dialog_open = false;
                 }
             });
         });
+    }
+
+    // 畅言绑定弹窗
+    if state.changyan_bind_dialog_open {
+        ui.card("畅言账号快速绑定", "输入畅言 User ID (UID) 与 SUC Token 进行云端绑定", |ui| {
+            ui.text_box_hint(&mut state.changyan_uid_input, "畅言 User ID (UID)");
+            ui.add_space(4.0);
+            ui.text_box_hint(&mut state.changyan_token_input, "畅言 SUC Token (suc_user_token)");
+            ui.add_space(8.0);
+
+            responsive_flow(ui, |ui| {
+                if accent_action_btn(ui, "✔ 确认绑定", None).clicked() {
+                    if let Some(ref la_sess) = state.la_session {
+                        let uid = state.changyan_uid_input.trim();
+                        let token = state.changyan_token_input.trim();
+                        if uid.is_empty() || token.is_empty() {
+                            state.notification = Some(("UID 和 SUC Token 不能为空".to_string(), InfoBarKind::Warning));
+                        } else {
+                            match LaClient::bind_changyan_account(&la_sess.access_token, uid, uid, token, "") {
+                                Ok(cloud) => {
+                                    state.changyan_bind_dialog_open = false;
+                                    state.changyan_token_input.clear();
+                                    state.notification = Some(("畅言账号绑定成功！正在加载作业列表...".to_string(), InfoBarKind::Success));
+                                    state.session = UserSession {
+                                        phone: cloud.account_display.clone(),
+                                        token: cloud.token.clone(),
+                                        device_code: cloud.device_code.clone(),
+                                        parent_account_id: cloud.parent_account_id.clone(),
+                                        user_name: cloud.account_display.clone(),
+                                        is_logged_in: true,
+                                    };
+                                    state.la_cloud_session = Some(cloud);
+                                    if let Ok(list) = CloudClient::get_homework_list(&state.session, "1") {
+                                        state.homework_items = list;
+                                    }
+                                }
+                                Err(e) => {
+                                    state.notification = Some((format!("绑定失败: {e}"), InfoBarKind::Error));
+                                }
+                            }
+                        }
+                    } else {
+                        state.notification = Some(("请先登录 LA Studio 账号以托管绑定".to_string(), InfoBarKind::Warning));
+                    }
+                }
+
+                if action_btn(ui, "取消").clicked() {
+                    state.changyan_bind_dialog_open = false;
+                }
+            });
+        });
+    }
+}
+
+/// 智能格式化设备显示名称：提取人类可读友好名称，隐藏超长 User-Agent 字符串，支持鼠标悬浮查看完整标识
+pub fn format_friendly_device_name(dev: &crate::la_client::LaDevice) -> (String, &'static str) {
+    let raw = &dev.device_name;
+    let raw_trim = raw.trim();
+    let plat_lower = dev.platform_version.to_lowercase();
+    let client_lower = dev.client_key.to_lowercase();
+
+    // 1. 如果是网页端 UA
+    if raw_trim.starts_with("Mozilla/") {
+        let os = if raw_trim.contains("Windows NT 10.0") || raw_trim.contains("Windows NT 11.0") || raw_trim.contains("Windows") {
+            "Windows PC"
+        } else if raw_trim.contains("Macintosh") || raw_trim.contains("Mac OS X") {
+            "Mac 电脑"
+        } else if raw_trim.contains("Android") {
+            "Android 设备"
+        } else if raw_trim.contains("iPhone") || raw_trim.contains("iPad") {
+            "iOS 设备"
+        } else if raw_trim.contains("Linux") {
+            "Linux PC"
+        } else {
+            "桌面端网页"
+        };
+
+        let browser = if raw_trim.contains("Edg/") {
+            "Edge 浏览器"
+        } else if raw_trim.contains("Chrome/") {
+            "Chrome 浏览器"
+        } else if raw_trim.contains("Firefox/") {
+            "Firefox 浏览器"
+        } else if raw_trim.contains("Safari/") {
+            "Safari 浏览器"
+        } else {
+            "Web 浏览器"
+        };
+
+        return (format!("{os} · {browser}"), "🌐");
+    }
+
+    // 2. 权威识别 PC 设备：
+    let is_windows = dev.is_current
+        || plat_lower.contains("windows")
+        || raw_trim.starts_with("PC-")
+        || raw_trim.to_uppercase().contains("LAPTOP")
+        || raw_trim.to_uppercase().contains("DESKTOP")
+        || raw_trim.to_uppercase().contains("WORKSTATION")
+        || raw_trim.to_uppercase().contains("WIN-")
+        || client_lower.contains("windows")
+        || client_lower == "fe_pc"
+        || client_lower == "fe-pc";
+
+    let is_mac = plat_lower.contains("mac")
+        || plat_lower.contains("darwin")
+        || raw_trim.contains("MacBook")
+        || raw_trim.contains("iMac")
+        || client_lower.contains("mac");
+
+    let is_ios = plat_lower.contains("ios")
+        || raw_trim.contains("iPhone")
+        || raw_trim.contains("iPad");
+
+    let is_android = !is_windows && !is_mac && !is_ios && (
+        plat_lower.contains("android")
+        || client_lower.contains("android")
+        || client_lower == "fe"
+    );
+
+    let icon = if is_windows || is_mac {
+        "💻"
+    } else if is_android || is_ios {
+        "📱"
+    } else if raw_trim.contains("Windows") || raw_trim.contains("Desktop") {
+        "💻"
+    } else {
+        "📱"
+    };
+
+    // 常规设备名称若过长（>32字），智能截断隐藏多余部分
+    if raw_trim.chars().count() > 32 {
+        let truncated: String = raw_trim.chars().take(29).collect();
+        (format!("{truncated}..."), icon)
+    } else if raw_trim.is_empty() {
+        ("未知终端设备".to_string(), icon)
+    } else {
+        (raw_trim.to_string(), icon)
     }
 }

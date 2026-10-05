@@ -1,1 +1,9 @@
 /target
+fepc_protected.exe
+fepc.exe
+dist/
+release_notes.md
+current_changelog.md
+tools/Themida
+*.dmp
+*.log

@@ -1,0 +1,88 @@
+name: Verify Fe PC Build
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: fepc-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: 质量门禁与跨平台验证 (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出 fepc 源码
+        uses: actions/checkout@v4
+        with:
+          path: fepc
+
+      - name: 并列检出 fluent-egui 依赖
+        uses: actions/checkout@v4
+        with:
+          repository: laststudio/fluent-egui
+          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          path: fluent-egui
+
+      - name: 并列检出 ets_resolver 依赖
+        uses: actions/checkout@v4
+        with:
+          repository: laststudio/ets_resolver
+          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          path: ets_resolver
+
+      - name: 配置 Rust 工具链 (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: x86_64-pc-windows-msvc
+
+      - name: 代码格式与类型检查 (cargo check)
+        working-directory: fepc
+        run: cargo check --all-targets
+
+      - name: 静态代码分析与规范检查 (cargo clippy)
+        working-directory: fepc
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: 运行全量单元测试 (cargo test)
+        working-directory: fepc
+        run: cargo test --tests
+
+      - name: 验证 Release 编译构建 (cargo build --release)
+        working-directory: fepc
+        run: cargo build --release
+
+      - name: 尝试装配加壳工具链 (可选跳过)
+        id: themida_probe
+        working-directory: fepc
+        shell: pwsh
+        env:
+          THEMIDA_ARCHIVE_URL: ${{ secrets.THEMIDA_ARCHIVE_URL }}
+          THEMIDA_DECRYPT_KEY: ${{ secrets.THEMIDA_DECRYPT_KEY }}
+          THEMIDA_REPO: ${{ vars.THEMIDA_REPO || 'laststudio/themida_tools' }}
+          THEMIDA_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/setup_themida.ps1
+
+      - name: 试运行加壳装甲流水线 (若 Themida 可用)
+        if: steps.themida_probe.outputs.themida_available == 'true'
+        working-directory: fepc
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File protect_themida.ps1 `
+            -ThemidaPath "$env:THEMIDA_PATH" `
+            -InputExe "target\release\fepc.exe" `
+            -OutputExe "target\release\fepc_protected.exe" `
+            -ProjectFile "fepc.tmd"

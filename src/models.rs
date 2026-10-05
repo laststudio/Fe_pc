@@ -13,7 +13,7 @@ pub struct QuestionOption {
     pub image_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ParsedQuestion {
     pub index: usize,
     pub number: String,
@@ -23,6 +23,8 @@ pub struct ParsedQuestion {
     pub important_points: Vec<String>,
     pub audio_file: Option<String>,
     pub options: Vec<QuestionOption>,
+    pub word_id: Option<i64>,
+    pub question_id: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

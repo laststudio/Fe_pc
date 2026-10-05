@@ -2,14 +2,37 @@ use eframe::egui::{Color32, RichText};
 use fluent_egui::winui::prelude::*;
 
 use crate::state::AppState;
-use crate::views::render_header;
+use crate::views::{accent_action_btn, action_btn, render_header, responsive_flow};
 
-pub fn render(ui: &mut FluentUi, _state: &mut AppState) {
+pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     render_header(
         ui,
         "第三方开源库与组件致谢",
         "致敬开源：Fe PC 深度受益于全球优秀开发者与开源基础设施的支持，特此署名致谢",
     );
+
+    // 软件许可与服务协议 (EULA) 专区
+    ui.card("软件许可与服务协议 (EULA)", "专有商业软件许可 · 隐私政策 · 服务与安全免责声明", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Fe PC 最终用户许可协议与免责声明").strong().size(14.0));
+            ui.label(RichText::new("(版本: 2026-10-05)").color(Color32::from_gray(140)).size(12.0));
+        });
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new("本软件为商业专有软件体系，受《中华人民共和国著作权法》与国际版权公约严格保护。\n\
+            点击下方按钮可随时查阅完整的专有商业软件许可、第三方凭据隐私授权与服务免责声明。")
+                .color(Color32::from_gray(180))
+                .size(12.5),
+        );
+        ui.add_space(6.0);
+        responsive_flow(ui, |ui| {
+            if accent_action_btn(ui, "📄 查看完整用户协议与服务免责声明 (EULA)", Some(Color32::from_rgb(0, 120, 215))).clicked() {
+                state.open_eula_modal(false);
+            }
+        });
+    });
+
+    ui.add_space(8.0);
 
     ui.card("开源致谢致辞 (Acknowledgments)", "致敬为生态无私奉献的开发者们", |ui| {
         ui.label(
@@ -198,5 +221,11 @@ pub fn render(ui: &mut FluentUi, _state: &mut AppState) {
         ui.label(RichText::new("开发者: code-leitianshuo (leitianshuo1337)").strong().size(15.0));
         ui.label(RichText::new("软件性质: 专有软件 (Proprietary / Closed Source) · 保留所有权利").color(Color32::from_rgb(255, 179, 0)));
         ui.label("本软件所有代码与设计由作者独立开发，不采用开源协议发布，未经授权请勿逆向或二次分发。");
+        ui.add_space(6.0);
+        responsive_flow(ui, |ui| {
+            if action_btn(ui, "📄 查看用户协议与服务免责声明 (EULA)").clicked() {
+                state.open_eula_modal(false);
+            }
+        });
     });
 }

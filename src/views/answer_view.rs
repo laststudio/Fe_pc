@@ -1,31 +1,39 @@
+// =========================================================================================
+// ⚠️ 试卷答案详情排版规范：
+// 1. 试卷标题可能极长，严禁使用刚性不可折行的 `ui.row` 包裹标题，必须使用 `responsive_flow`。
+// 2. 题目卡片底部的复制按钮统一使用 `responsive_flow` + `subtle_action_btn`。
+// =========================================================================================
+
 use eframe::egui::{self, Color32, RichText};
 use fluent_egui::winui::prelude::*;
 use fluent_egui::winui::InfoBarKind;
 
 use crate::state::{AnswerViewMode, AppState, NavTab};
 use crate::utils::exporter::Exporter;
+use crate::views::{accent_action_btn, action_btn, choice_btn, responsive_flow, subtle_action_btn};
 
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     let hw = match &state.selected_homework {
         Some(h) => h.clone(),
         None => {
             ui.card("未选择试卷", "请返回试卷列表选择一份作业进行查看", |ui| {
-                if ui.accent_button("⬅ 返回试卷列表").clicked() {
-                    state.current_tab = NavTab::HomeworkList;
-                }
+                responsive_flow(ui, |ui| {
+                    if accent_action_btn(ui, "⬅ 返回试卷列表", None).clicked() {
+                        state.current_tab = NavTab::HomeworkList;
+                    }
+                });
             });
             return;
         }
     };
 
     // 头部导航栏
-    ui.row(|ui| {
-        if ui.button("⬅ 返回列表").clicked() {
+    responsive_flow(ui, |ui| {
+        if action_btn(ui, "⬅ 返回列表").clicked() {
             state.selected_homework = None;
             state.current_tab = NavTab::HomeworkList;
-            return;
         }
-        ui.heading(&hw.name);
+        ui.heading(RichText::new(&hw.name).size(20.0).strong());
     });
 
     let subtitle = format!(
@@ -36,32 +44,42 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     // 操作控制面板
     ui.card("查看与导出控制", "切换答案显示形式或导出文件", |ui| {
-        ui.row(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            let accent = state.theme_config.accent;
+
             // 视图切换
             let is_detailed = state.answer_view_mode == AnswerViewMode::Detailed;
-            if ui.button(if is_detailed { "📝 当前: 详细视图" } else { "切换为详细视图" }).clicked() {
+            if choice_btn(ui, "📝 详细视图", is_detailed, accent).clicked() {
                 state.answer_view_mode = AnswerViewMode::Detailed;
             }
 
             let is_concise = state.answer_view_mode == AnswerViewMode::Concise;
-            if ui.button(if is_concise { "⚡ 当前: 极简速查" } else { "切换为极简速查" }).clicked() {
+            if choice_btn(ui, "⚡ 极简速查", is_concise, accent).clicked() {
                 state.answer_view_mode = AnswerViewMode::Concise;
             }
 
-            ui.separator();
-
-            if ui.accent_button("📋 复制全部答案").clicked() {
-                let text = match state.answer_view_mode {
-                    AnswerViewMode::Detailed => Exporter::format_full_answers(&hw),
-                    AnswerViewMode::Concise => Exporter::format_concise_answers(&hw),
-                };
-                if Exporter::copy_text_to_clipboard(&text).is_ok() {
-                    state.notification = Some(("已成功将答案复制到剪贴板！".to_string(), InfoBarKind::Success));
+            let copy_check = state.check_feature("copy_export");
+            let copy_label = if copy_check.allowed { "📋 复制全部答案" } else { "👑 会员复制全部答案" };
+            if action_btn(ui, copy_label).clicked() {
+                if !copy_check.allowed {
+                    state.trigger_auth_gate_modal("copy_export", "答案复制与导出");
+                } else {
+                    let text = match state.answer_view_mode {
+                        AnswerViewMode::Detailed => Exporter::format_full_answers(&hw),
+                        AnswerViewMode::Concise => Exporter::format_concise_answers(&hw),
+                    };
+                    if Exporter::copy_text_to_clipboard(&text).is_ok() {
+                        state.notification = Some(("已成功将答案复制到剪贴板！".to_string(), InfoBarKind::Success));
+                    }
                 }
             }
 
-            if ui.button("💾 导出为 TXT").clicked()
-                && let Some(path) = rfd::FileDialog::new()
+            let export_label = if copy_check.allowed { "💾 导出为 TXT" } else { "👑 会员导出为 TXT" };
+            if action_btn(ui, export_label).clicked() {
+                if !copy_check.allowed {
+                    state.trigger_auth_gate_modal("copy_export", "答案复制与导出");
+                } else if let Some(path) = rfd::FileDialog::new()
                     .set_file_name(format!("{}_答案.txt", hw.name))
                     .add_filter("文本文件", &["txt"])
                     .save_file()
@@ -71,9 +89,13 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         state.notification = Some((format!("已成功导出至: {:?}", path), InfoBarKind::Success));
                     }
                 }
+            }
 
-            if ui.button("📝 导出 Markdown").clicked()
-                && let Some(path) = rfd::FileDialog::new()
+            let md_label = if copy_check.allowed { "📝 导出 Markdown" } else { "👑 会员导出 Markdown" };
+            if action_btn(ui, md_label).clicked() {
+                if !copy_check.allowed {
+                    state.trigger_auth_gate_modal("copy_export", "答案复制与导出");
+                } else if let Some(path) = rfd::FileDialog::new()
                     .set_file_name(format!("{}_答案.md", hw.name))
                     .add_filter("Markdown 文件", &["md"])
                     .save_file()
@@ -83,8 +105,9 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         state.notification = Some((format!("已成功导出至: {:?}", path), InfoBarKind::Success));
                     }
                 }
+            }
 
-            if ui.button("🚀 以此卷发起自动做题").clicked() {
+            if action_btn(ui, "🚀 以此卷发起自动做题").clicked() {
                 state.auto_selected_hw_id = Some(hw.id.clone());
                 state.current_tab = NavTab::AutoComplete;
             }
@@ -190,15 +213,15 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         }
 
                         ui.add_space(6.0);
-                        ui.row(|ui| {
+                        responsive_flow(ui, |ui| {
                             let copy_label = if q.answers.len() > 1 { "复制首选答案" } else { "复制本题答案" };
-                            if ui.subtle_button(copy_label).clicked()
+                            if subtle_action_btn(ui, copy_label).clicked()
                                 && let Some(ans) = q.answers.first()
                                     && Exporter::copy_text_to_clipboard(ans).is_ok() {
                                         state.notification = Some(("已复制首选答案到剪贴板！".to_string(), InfoBarKind::Success));
                                     }
                             if q.answers.len() > 1
-                                && ui.subtle_button(format!("复制全部 {} 种表述", q.answers.len())).clicked() {
+                                && subtle_action_btn(ui, &format!("复制全部 {} 种表述", q.answers.len())).clicked() {
                                     let text = q.answers.join("\n");
                                     if Exporter::copy_text_to_clipboard(&text).is_ok() {
                                         state.notification = Some(("已复制全部备选表述到剪贴板！".to_string(), InfoBarKind::Success));

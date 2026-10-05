@@ -48,6 +48,7 @@ pub static mut __pfnDliNotifyHook2: unsafe extern "system" fn(u32, *const DelayL
 
 
 fn main() -> eframe::Result {
+    fepc::telemetry::install_panic_hook();
     fepc::workflow::tts::ensure_crypto_provider();
 
     let config = ThemeConfig::new(FluentTheme::Dark)
@@ -59,6 +60,9 @@ fn main() -> eframe::Result {
         "Fe PC - e听说答案提取器",
         RenderBackend::default(),
     );
+    options.viewport = options.viewport
+        .with_min_inner_size(eframe::egui::vec2(860.0, 560.0))
+        .with_inner_size(eframe::egui::vec2(1040.0, 680.0));
     if let Some(ic) = icon {
         options.viewport = options.viewport.with_icon(ic);
     }

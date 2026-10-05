@@ -1,12 +1,12 @@
 [package]
 name = "fepc"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 authors = ["code-leitianshuo (leitianshuo1337)"]
 publish = false
 
 [dependencies]
-fluent-egui = { version = "0.1.1", features = ["windows-platform", "glow"] }
+fluent-egui = { path = "../fluent-egui", features = ["windows-platform", "glow"] }
 resolver = { path = "../ets_resolver" }
 cloud = { path = "../ets_resolver/cloud" }
 eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow"] }
@@ -28,6 +28,9 @@ msedge-tts = "0.4.0"
 uuid = { version = "1.26.1", features = ["v4"] }
 sha2 = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+flate2 = "1.0"
+regex = "1.13"
+ring = "0.17"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

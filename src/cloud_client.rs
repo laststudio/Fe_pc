@@ -175,13 +175,21 @@ impl CloudClient {
                 let name = hw.get("name").and_then(|v| v.as_str()).unwrap_or("未命名作业").to_string();
                 let deadline = hw.get("deadline").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let status_str = hw.get("status_name").and_then(|v| v.as_str()).unwrap_or(status).to_string();
-                let total_point = hw.get("total_point").and_then(|v| v.as_f64()).unwrap_or(30.0);
-                let awarded_point = hw.get("real_score").and_then(|v| v.as_f64());
-                let question_count = hw.get("question_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
                 let set_type = hw.get("set_type").and_then(|v| v.as_i64()).unwrap_or(0);
                 let pk = hw.get("pk").and_then(|v| v.as_i64()).unwrap_or(0);
                 let resource_id = hw.get("resource_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                let raw_point = hw.get("total_point").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let total_point = if set_type == 6 || pk == 1 {
+                    100.0
+                } else if raw_point <= 0.0 || (raw_point - 100.0).abs() < 0.01 {
+                    if name.contains("北京") { 40.0 } else { 30.0 }
+                } else {
+                    raw_point
+                };
+                let awarded_point = hw.get("real_score").and_then(|v| v.as_f64());
+                let question_count = hw.get("question_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
                 let mut resource_urls = Vec::new();
                 if let Some(contents) = hw.get("contents").and_then(|v| v.as_array()) {
@@ -356,6 +364,9 @@ impl CloudClient {
                 }
             }
 
+            let word_id = raw_q.get("word_id").and_then(|v| v.as_i64());
+            let question_id = raw_q.get("question_id").and_then(|v| v.as_i64());
+
             questions.push(ParsedQuestion {
                 index: i,
                 number: no,
@@ -365,6 +376,8 @@ impl CloudClient {
                 important_points: Vec::new(),
                 audio_file: None,
                 options,
+                word_id,
+                question_id,
             });
         }
 
@@ -575,6 +588,8 @@ impl CloudClient {
                             }
 
                             let audio_file = raw_q.get("audio").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            let word_id = raw_q.get("word_id").and_then(|v| v.as_i64());
+                            let question_id = raw_q.get("question_id").and_then(|v| v.as_i64());
 
                             questions.push(ParsedQuestion {
                                 index: question_counter - 1,
@@ -585,6 +600,8 @@ impl CloudClient {
                                 important_points,
                                 audio_file,
                                 options,
+                                word_id,
+                                question_id,
                             });
                         }
 
