@@ -120,7 +120,9 @@ macro_rules! themida_lion_white {
     ($($body:tt)*) => {{
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_LION_WHITE_START(); }
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         let result = { $($body)* };
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_LION_WHITE_END(); }
         result
@@ -133,7 +135,9 @@ macro_rules! themida_tiger_red {
     ($($body:tt)*) => {{
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_TIGER_RED_START(); }
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         let result = { $($body)* };
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_TIGER_RED_END(); }
         result
@@ -146,7 +150,9 @@ macro_rules! themida_tiger_white {
     ($($body:tt)*) => {{
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_TIGER_WHITE_START(); }
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         let result = { $($body)* };
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_TIGER_WHITE_END(); }
         result
@@ -159,7 +165,9 @@ macro_rules! themida_falcon_tiny {
     ($($body:tt)*) => {{
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_FALCON_TINY_START(); }
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         let result = { $($body)* };
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_FALCON_TINY_END(); }
         result

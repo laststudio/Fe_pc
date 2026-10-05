@@ -933,14 +933,14 @@ fn test_changyan_session_model() {
 
 #[test]
 fn test_logo_texture_resampling() {
-    let logo_1024_bytes = include_bytes!("../fe_logo_1024.png");
-    let dyn_img = image::load_from_memory(logo_1024_bytes).expect("Should load fe_logo_1024.png");
-    assert_eq!(dyn_img.width(), 1024);
-    assert_eq!(dyn_img.height(), 1024);
+    let logo_bytes = include_bytes!("../fe_logo.png");
+    let dyn_img = image::load_from_memory(logo_bytes).expect("Should load fe_logo.png");
+    assert_eq!(dyn_img.width(), 256);
+    assert_eq!(dyn_img.height(), 256);
 
     let rgba = dyn_img.to_rgba8();
-    assert_eq!(rgba.len(), 1024 * 1024 * 4);
-    println!("✓ 1024x1024 超高清 Logo 纹理完整性验证通过！");
+    assert_eq!(rgba.len(), 256 * 256 * 4);
+    println!("✓ 256x256 高清抗锯齿 Logo 纹理完整性验证通过！");
 }
 
 #[test]
@@ -981,12 +981,12 @@ fn test_render_sidebar_and_logo() {
     let ctx = eframe::egui::Context::default();
     let mut state = fepc::state::AppState::default();
 
-    // 加载 1024x1024 超高清纹理，并启用硬件 Mipmap 三线性插值
-    let logo_1024_bytes = include_bytes!("../fe_logo_1024.png");
-    let dyn_img = image::load_from_memory(logo_1024_bytes).expect("Should load 1024 logo");
+    // 加载 256x256 高清抗锯齿纹理，并启用硬件 Mipmap 三线性插值
+    let logo_bytes = include_bytes!("../fe_logo.png");
+    let dyn_img = image::load_from_memory(logo_bytes).expect("Should load 256 logo");
     let rgba = dyn_img.to_rgba8();
     let color_image = eframe::egui::ColorImage::from_rgba_unmultiplied(
-        [1024, 1024],
+        [256, 256],
         &rgba.into_raw(),
     );
     let texture_options = eframe::egui::TextureOptions {

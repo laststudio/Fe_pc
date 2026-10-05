@@ -536,10 +536,9 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                             state.notification = Some((format!("欢迎回来，{}！", sess.user.username), InfoBarKind::Success));
 
                             let cloud_dev_code = LaClient::get_cloud_device_code(&sess.access_token).ok();
-                            if let Some(ref code) = cloud_dev_code {
-                                if !code.is_empty() {
-                                    state.session.device_code = code.clone();
-                                }
+                            if let Some(ref code) = cloud_dev_code
+                                && !code.is_empty() {
+                                state.session.device_code = code.clone();
                             }
 
                             // 尝试自动激活绑定的 ETS 云端会话
@@ -631,10 +630,9 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                                     state.notification = Some((format!("欢迎回来，{}！", sess.user.username), InfoBarKind::Success));
 
                                     let cloud_dev_code = LaClient::get_cloud_device_code(&sess.access_token).ok();
-                                    if let Some(ref code) = cloud_dev_code {
-                                        if !code.is_empty() {
-                                            state.session.device_code = code.clone();
-                                        }
+                                    if let Some(ref code) = cloud_dev_code
+                                        && !code.is_empty() {
+                                        state.session.device_code = code.clone();
                                     }
 
                                     if let Ok(cloud) = LaClient::get_cloud_session(&sess.access_token, "") {
@@ -712,10 +710,8 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
         ui.add_space(4.0);
 
         if state.session.device_code.is_empty() {
-            if let Some(ref la_sess) = state.la_session {
-                if let Ok(code) = LaClient::get_cloud_device_code(&la_sess.access_token) {
-                    state.session.device_code = code;
-                }
+            if let Some(code) = state.la_session.as_ref().and_then(|s| LaClient::get_cloud_device_code(&s.access_token).ok()) {
+                state.session.device_code = code;
             }
         }
         if state.session.device_code.is_empty() {

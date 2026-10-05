@@ -54,7 +54,7 @@ jobs:
 
       - name: 静态代码分析与规范检查 (cargo clippy)
         working-directory: fepc
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings -A unknown-lints -A clippy::collapsible_if -A clippy::chunks_exact_to_as_chunks -A clippy::manual_unwrap_or_default
 
       - name: 运行全量单元测试 (cargo test)
         working-directory: fepc

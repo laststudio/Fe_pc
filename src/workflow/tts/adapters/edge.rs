@@ -85,15 +85,7 @@ impl TtsEngine for EdgeAdapter {
             self.config.rate
         };
 
-        let speech_config = crate::themida_falcon_tiny!({
-            SpeechConfig {
-                voice_name: voice.to_string(),
-                audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
-                pitch,
-                rate,
-                volume: 0,
-            }
-        });
+        let speech_config = build_speech_config(voice, pitch, rate);
 
         let mut last_error = String::new();
         let max_retries = 3;
@@ -125,4 +117,17 @@ impl TtsEngine for EdgeAdapter {
 
         Err(format!("Edge TTS 语音合成失败 (已自动重试3次): {last_error}"))
     }
+}
+
+#[inline(never)]
+fn build_speech_config(voice: &str, pitch: i32, rate: i32) -> SpeechConfig {
+    crate::themida_falcon_tiny!({
+        SpeechConfig {
+            voice_name: voice.to_string(),
+            audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
+            pitch,
+            rate,
+            volume: 0,
+        }
+    })
 }

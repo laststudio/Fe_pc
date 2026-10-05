@@ -1400,6 +1400,7 @@ name = "fluent-egui"
 version = "0.1.1"
 dependencies = [
  "eframe",
+ "flate2",
  "glow",
  "image",
  "raw-window-handle",

@@ -142,40 +142,39 @@ pub fn render_announcement_modal(ctx: &egui::Context, state: &mut AppState) {
                                     .color(if is_dark { Color32::from_gray(230) } else { Color32::from_gray(40) })
                             );
 
-                            if let Some(ref log) = changelog {
-                                if !log.trim().is_empty() {
-                                    ui.add_space(10.0);
-                                    let log_bg = if is_dark {
-                                        Color32::from_rgba_unmultiplied(20, 30, 45, 200)
-                                    } else {
-                                        Color32::from_rgb(240, 245, 255)
-                                    };
-                                    let log_border = if is_dark {
-                                        Color32::from_rgb(40, 70, 110)
-                                    } else {
-                                        Color32::from_rgb(200, 220, 250)
-                                    };
+                            if let Some(ref log) = changelog
+                                && !log.trim().is_empty() {
+                                ui.add_space(10.0);
+                                let log_bg = if is_dark {
+                                    Color32::from_rgba_unmultiplied(20, 30, 45, 200)
+                                } else {
+                                    Color32::from_rgb(240, 245, 255)
+                                };
+                                let log_border = if is_dark {
+                                    Color32::from_rgb(40, 70, 110)
+                                } else {
+                                    Color32::from_rgb(200, 220, 250)
+                                };
 
-                                    egui::Frame::new()
-                                        .fill(log_bg)
-                                        .corner_radius(6.0)
-                                        .stroke(Stroke::new(1.0, log_border))
-                                        .inner_margin(Margin::symmetric(12, 10))
-                                        .show(ui, |ui| {
-                                            ui.label(
-                                                RichText::new("📝 版本更新日志与变动摘要:")
-                                                    .size(12.5)
-                                                    .strong()
-                                                    .color(Color32::from_rgb(0, 160, 255))
-                                            );
-                                            ui.add_space(4.0);
-                                            ui.label(
-                                                RichText::new(log)
-                                                    .size(12.0)
-                                                    .color(if is_dark { Color32::from_gray(210) } else { Color32::from_gray(60) })
-                                            );
-                                        });
-                                }
+                                egui::Frame::new()
+                                    .fill(log_bg)
+                                    .corner_radius(6.0)
+                                    .stroke(Stroke::new(1.0, log_border))
+                                    .inner_margin(Margin::symmetric(12, 10))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new("📝 版本更新日志与变动摘要:")
+                                                .size(12.5)
+                                                .strong()
+                                                .color(Color32::from_rgb(0, 160, 255))
+                                        );
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(log)
+                                                .size(12.0)
+                                                .color(if is_dark { Color32::from_gray(210) } else { Color32::from_gray(60) })
+                                        );
+                                    });
                             }
                         });
                 });
@@ -185,10 +184,9 @@ pub fn render_announcement_modal(ctx: &egui::Context, state: &mut AppState) {
                 .inner_margin(Margin { left: 20, right: 20, top: 4, bottom: 16 })
                 .show(ui, |ui| {
                     responsive_flow(ui, |ui| {
-                        if let Some(ref url) = url_opt {
-                            if action_btn(ui, "🌐 查看详情 / 访问官网").clicked() {
-                                action_open_url = Some(url.clone());
-                            }
+                        if let Some(ref url) = url_opt
+                            && action_btn(ui, "🌐 查看详情 / 访问官网").clicked() {
+                            action_open_url = Some(url.clone());
                         }
 
                         if accent_action_btn(ui, "✔ 好的，我知道了", state.theme_config.accent).clicked() {

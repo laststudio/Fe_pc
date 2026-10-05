@@ -231,16 +231,14 @@ impl AppState {
 
     fn evaluate_feature_permission(&self, feature_key: &str) -> crate::la_client::FeatureCheckResult {
         // 0. 管理员特权直接放行所有功能 (role <= 1)
-        if let Some(session) = &self.la_session {
-            if session.user.role <= 1 {
-                return crate::la_client::FeatureCheckResult {
-                    allowed: true,
-                    reason: "管理员特权放行".to_string(),
-                    required_tier: "ultra".to_string(),
-                    requires_login: false,
-                    requires_membership: false,
-                };
-            }
+        if self.la_session.as_ref().is_some_and(|s| s.user.role <= 1) {
+            return crate::la_client::FeatureCheckResult {
+                allowed: true,
+                reason: "管理员特权放行".to_string(),
+                required_tier: "ultra".to_string(),
+                requires_login: false,
+                requires_membership: false,
+            };
         }
         let feature_opt = if self.features_loaded || !self.features.is_empty() {
             self.features.get(feature_key)

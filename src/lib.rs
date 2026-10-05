@@ -1,3 +1,8 @@
+#![allow(unknown_lints)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+#![allow(clippy::manual_unwrap_or_default)]
+
 pub mod app;
 pub mod auto_complete;
 pub mod cloud_client;

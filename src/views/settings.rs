@@ -467,10 +467,9 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             ui.add_space(4.0);
             ui.separator();
             ui.label(RichText::new("📢 服务端公告与版本发布说明").strong().color(accent.unwrap_or(Color32::from_rgb(0, 120, 215))));
-            if let Some(ref title) = policy.announcement_title {
-                if !title.trim().is_empty() {
-                    ui.label(RichText::new(format!("📌 当前公告: {}", title)).strong());
-                }
+            if let Some(ref title) = policy.announcement_title
+                && !title.trim().is_empty() {
+                ui.label(RichText::new(format!("📌 当前公告: {}", title)).strong());
             }
             let display_msg = policy.notice_message.as_deref()
                 .or(policy.announcement_message.as_deref())
@@ -478,26 +477,22 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             if !display_msg.trim().is_empty() {
                 ui.label(RichText::new(display_msg).size(12.0));
             }
-            if let Some(ref update) = policy.update_message {
-                if !update.trim().is_empty() {
-                    ui.label(RichText::new(format!("🚀 更新提示: {}", update)).size(12.0).color(Color32::from_rgb(0, 150, 255)));
-                }
+            if let Some(ref update) = policy.update_message
+                && !update.trim().is_empty() {
+                ui.label(RichText::new(format!("🚀 更新提示: {}", update)).size(12.0).color(Color32::from_rgb(0, 150, 255)));
             }
-            if let Some(ref changelog) = policy.changelog_summary {
-                if !changelog.trim().is_empty() {
-                    ui.label(RichText::new(format!("📝 版本变更: {}", changelog)).size(11.5).color(Color32::from_gray(160)));
-                }
+            if let Some(ref changelog) = policy.changelog_summary
+                && !changelog.trim().is_empty() {
+                ui.label(RichText::new(format!("📝 版本变更: {}", changelog)).size(11.5).color(Color32::from_gray(160)));
             }
             responsive_flow(ui, |ui| {
                 if action_btn(ui, "📢 查看公告与版本详情弹窗").clicked() {
                     state.announcement_modal_open = true;
                 }
-                if let Some(ref url) = policy.announcement_url {
-                    if !url.trim().is_empty() {
-                        if action_btn(ui, "🌐 打开外部公告网页").clicked() {
-                            let _ = open::that(url);
-                        }
-                    }
+                if let Some(ref url) = policy.announcement_url
+                    && !url.trim().is_empty()
+                    && action_btn(ui, "🌐 打开外部公告网页").clicked() {
+                    let _ = open::that(url);
                 }
             });
         }

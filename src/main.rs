@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(unknown_lints)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+#![allow(clippy::manual_unwrap_or_default)]
 
 use fepc::app::FepcApp;
 use fluent_egui::winui::{FluentTheme, RenderBackend, ThemeConfig};

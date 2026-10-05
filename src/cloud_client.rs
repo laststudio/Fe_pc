@@ -670,6 +670,7 @@ impl CloudClient {
     }
 
     /// 底层调用 ETS100 官方签名接口
+    #[inline(never)]
     pub fn call_ets_api(endpoint: &str, route: &str, params: Value) -> Result<Value, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

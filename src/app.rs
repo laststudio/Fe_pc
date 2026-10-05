@@ -45,10 +45,9 @@ impl FepcApp {
                 let msg = policy.announcement_message.as_deref().unwrap_or("");
                 state.notification = Some((format!("【公告: {title}】{msg}"), InfoBarKind::Informational));
             }
-            if let Some(ref title) = policy.announcement_title {
-                if !title.trim().is_empty() {
-                    state.announcement_modal_open = true;
-                }
+            if let Some(ref title) = policy.announcement_title
+                && !title.trim().is_empty() {
+                state.announcement_modal_open = true;
             }
             state.software_policy = Some(policy);
         }
@@ -74,10 +73,9 @@ impl FepcApp {
                 state.features_loaded = true;
             }
             // 优先获取云端分配的设备代码
-            if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&la_sess.access_token) {
-                if !dev_code.trim().is_empty() {
-                    state.session.device_code = dev_code;
-                }
+            if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&la_sess.access_token)
+                && !dev_code.trim().is_empty() {
+                state.session.device_code = dev_code;
             }
             // 尝试恢复云端托管的 ETS100 会话
             if let Ok(cloud_sess) = crate::la_client::LaClient::get_cloud_session(&la_sess.access_token, "") {
@@ -315,10 +313,9 @@ impl eframe::App for FepcApp {
                 match crate::la_client::LaClient::login(&u, &p, Some(&token)) {
                     Ok(session) => {
                         crate::la_client::sync_auth_to_resolver(&session.access_token);
-                        if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&session.access_token) {
-                            if !dev_code.trim().is_empty() {
-                                self.state.session.device_code = dev_code;
-                            }
+                        if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&session.access_token)
+                            && !dev_code.trim().is_empty() {
+                            self.state.session.device_code = dev_code;
                         }
                         let ets_result = crate::la_client::LaClient::get_cloud_session(&session.access_token, "");
                         match ets_result {
@@ -405,7 +402,7 @@ impl eframe::App for FepcApp {
                 wrap_mode: egui::TextureWrapMode::ClampToEdge,
                 mipmap_mode: Some(egui::TextureFilter::Linear),
             };
-            let raw_bytes = include_bytes!("../fe_logo_1024.png");
+            let raw_bytes = include_bytes!("../fe_logo.png");
             if let Ok(dyn_img) = image::load_from_memory(raw_bytes) {
                 let rgba = dyn_img.to_rgba8();
                 let width = dyn_img.width() as usize;
@@ -415,7 +412,7 @@ impl eframe::App for FepcApp {
                     &rgba.into_raw(),
                 );
                 self.logo_texture = Some(ui.ctx().load_texture("app_logo", color_image, texture_options));
-            } else if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../fe_logo.png")) {
+            } else if let Ok(icon) = eframe::icon_data::from_png_bytes(raw_bytes) {
                 let color_image = egui::ColorImage::from_rgba_unmultiplied(
                     [icon.width as usize, icon.height as usize],
                     &icon.rgba,
@@ -686,12 +683,10 @@ impl eframe::App for FepcApp {
                                                         if ui.button(RichText::new("✕").size(12.0).color(Color32::from_gray(140))).on_hover_text("关闭本次公告提示").clicked() {
                                                             self.state.announcement_banner_dismissed = true;
                                                         }
-                                                        if let Some(ref url) = policy.announcement_url {
-                                                            if !url.trim().is_empty() {
-                                                                if ui.button(RichText::new("🔗 查看链接").size(11.5).color(Color32::from_rgb(0, 120, 215))).clicked() {
-                                                                    let _ = open::that(url);
-                                                                }
-                                                            }
+                                                        if let Some(ref url) = policy.announcement_url
+                                                            && !url.trim().is_empty()
+                                                            && ui.button(RichText::new("🔗 查看链接").size(11.5).color(Color32::from_rgb(0, 120, 215))).clicked() {
+                                                            let _ = open::that(url);
                                                         }
                                                         if ui.button(RichText::new("详情").size(11.5)).clicked() {
                                                             self.state.announcement_modal_open = true;

@@ -1061,11 +1061,9 @@ impl LaClient {
 
                     let policy = serde_json::from_value::<LaSoftwarePolicy>(policy_val)
                         .map_err(|e| format!("解析策略数据模型失败: {e}"))?;
-                    if let Some(ref pk) = policy.signing_public_key {
-                        if let Some(bytes) = decode_public_key_bytes(pk) {
-                            if let Ok(mut lock) = DYNAMIC_SIGNING_PUBLIC_KEY.write() {
-                                *lock = Some(bytes);
-                            }
+                    if let Some(bytes) = policy.signing_public_key.as_deref().and_then(decode_public_key_bytes) {
+                        if let Ok(mut lock) = DYNAMIC_SIGNING_PUBLIC_KEY.write() {
+                            *lock = Some(bytes);
                         }
                     }
                     return Ok(policy);

@@ -131,7 +131,7 @@ if ($ExitCode -eq 0 -and (Test-Path $OutputExe)) {
     }
 } else {
     Write-Host "[-] Themida 加壳失败，退出代码: $ExitCode" -ForegroundColor Red
-    exit (if ($ExitCode -ne 0) { $ExitCode } else { 1 })
+    if ($ExitCode -ne 0) { exit $ExitCode } else { exit 1 }
 }
 
 exit 0
