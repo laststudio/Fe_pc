@@ -138,6 +138,10 @@ pub struct LaSoftwarePolicy {
     pub announcement_url: Option<String>,
     #[serde(alias = "changelog_summary", default)]
     pub changelog_summary: Option<String>,
+    #[serde(alias = "signing_public_key", alias = "signingPublicKey", alias = "signing_key", default)]
+    pub signing_public_key: Option<String>,
+    #[serde(alias = "signing_key_id", alias = "signingKeyId", default)]
+    pub signing_key_id: Option<String>,
     #[serde(default)]
     pub features: Value,
 }
@@ -315,9 +319,10 @@ pub fn fetch_signing_public_key() -> Result<Vec<u8>, String> {
     if let Ok(val) = serde_json::from_str::<Value>(&body_str) {
         let key_str = val
             .get("public_key")
+            .or_else(|| val.get("public_key_b64"))
             .or_else(|| val.get("key"))
             .or_else(|| val.get("signing_key"))
-            .or_else(|| val.get("data").and_then(|d| d.get("public_key").or_else(|| d.get("key"))))
+            .or_else(|| val.get("data").and_then(|d| d.get("public_key").or_else(|| d.get("public_key_b64")).or_else(|| d.get("key"))))
             .and_then(|s| s.as_str());
         if let Some(k) = key_str
             && let Some(bytes) = decode_public_key_bytes(k) {
@@ -344,6 +349,19 @@ pub fn get_or_fetch_signing_public_key() -> Vec<u8> {
             *lock = Some(k.clone());
     }
     k
+}
+
+/// 获取当前激活的验签公钥 Base64 字符串（URL Safe 无 Padding）
+pub fn get_or_fetch_signing_public_key_b64() -> Option<String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    let bytes = get_or_fetch_signing_public_key();
+    if bytes.len() == 32 {
+        Some(URL_SAFE_NO_PAD.encode(&bytes))
+    } else {
+        None
+    }
 }
 
 /// 利用 ring 校验 Ed25519 签名与响应 body 防篡改
@@ -1041,8 +1059,16 @@ impl LaClient {
                         val
                     };
 
-                    return serde_json::from_value::<LaSoftwarePolicy>(policy_val)
-                        .map_err(|e| format!("解析策略数据模型失败: {e}"));
+                    let policy = serde_json::from_value::<LaSoftwarePolicy>(policy_val)
+                        .map_err(|e| format!("解析策略数据模型失败: {e}"))?;
+                    if let Some(ref pk) = policy.signing_public_key {
+                        if let Some(bytes) = decode_public_key_bytes(pk) {
+                            if let Ok(mut lock) = DYNAMIC_SIGNING_PUBLIC_KEY.write() {
+                                *lock = Some(bytes);
+                            }
+                        }
+                    }
+                    return Ok(policy);
                 }
                 Err(ureq::Error::Status(404, _)) => {
                     continue;
@@ -1190,11 +1216,14 @@ impl LaClient {
         // 若成功获得签名，配置到 resolver
         #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
         {
+            let pk_b64 = get_or_fetch_signing_public_key_b64();
+            let pk_str = pk_b64.as_deref();
+
             resolver::auth::configure_auth(
                 LA_BASE_URL,
                 LA_SOFTWARE_KEY,
                 feature_key,
-                None,
+                pk_str,
                 LA_APP_VERSION_CODE,
             ).ok();
             resolver::auth::set_token(access_token);
@@ -1448,13 +1477,15 @@ pub fn sync_auth_to_resolver(access_token: &str) {
     {
         let token = access_token.trim();
         let enabled = !token.is_empty();
+        let pk_b64 = get_or_fetch_signing_public_key_b64();
+        let pk_str = pk_b64.as_deref();
 
         // 1. 同步题目解析引擎 (resolver)
         resolver::auth::configure_auth(
             LA_BASE_URL,
             LA_SOFTWARE_KEY,
             "answer_parser",
-            None,
+            pk_str,
             LA_APP_VERSION_CODE,
         ).ok();
         resolver::auth::set_token(token);
@@ -1465,7 +1496,7 @@ pub fn sync_auth_to_resolver(access_token: &str) {
             LA_BASE_URL,
             LA_SOFTWARE_KEY,
             "cloud_mode",
-            None,
+            pk_str,
             LA_APP_VERSION_CODE,
         ).ok();
         cloud::auth::set_token(token);
