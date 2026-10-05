@@ -142,7 +142,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     // 过滤题目
     let filter = state.search_filter.trim().to_lowercase();
-    let display_items: Vec<&HomeworkItem> = state
+    let display_items: Vec<HomeworkItem> = state
         .homework_items
         .iter()
         .chain(state.local_items.iter())
@@ -172,6 +172,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             };
             matches_category && matches_text && matches_status
         })
+        .cloned()
         .collect();
 
     let category_title = match state.selected_category {
@@ -211,7 +212,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     }
 
     // 自然卡片排版 (操作按钮使用 horizontal_wrapped 防止任何屏幕溢出)
-    for hw in display_items {
+    for hw in &display_items {
         let is_cloud = hw.source == HomeworkSource::Cloud;
         let is_pk = hw.is_pk_or_vocab();
 
@@ -247,6 +248,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
             responsive_flow(ui, |ui| {
                 if accent_action_btn(ui, "📖 查看答案", None).clicked() {
+                    state.report_feature_usage("answer_parser");
                     state.selected_homework = Some(hw.clone());
                     state.answer_view_mode = AnswerViewMode::Detailed;
                     // 如果是云端作业且未下载解析，触发下载 / 回退解析
@@ -263,6 +265,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 }
 
                 if action_btn(ui, "⚡ 极简答案").clicked() {
+                    state.report_feature_usage("answer_parser");
                     state.selected_homework = Some(hw.clone());
                     state.answer_view_mode = AnswerViewMode::Concise;
                     if is_cloud && !hw.is_parsed()
@@ -277,6 +280,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 }
 
                 if subtle_action_btn(ui, "📋 复制全部答案").clicked() {
+                    state.report_feature_usage("copy_export");
                     let hw_to_copy = if is_cloud && !hw.is_parsed() {
                         CloudClient::download_and_parse_homework(&state.session, hw).unwrap_or_else(|_| hw.clone())
                     } else {

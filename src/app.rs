@@ -45,6 +45,11 @@ impl FepcApp {
                 let msg = policy.announcement_message.as_deref().unwrap_or("");
                 state.notification = Some((format!("【公告: {title}】{msg}"), InfoBarKind::Informational));
             }
+            if let Some(ref title) = policy.announcement_title {
+                if !title.trim().is_empty() {
+                    state.announcement_modal_open = true;
+                }
+            }
             state.software_policy = Some(policy);
         }
 
@@ -58,6 +63,8 @@ impl FepcApp {
 
         // 尝试加载已保存的 LA Studio 会话
         if let Some(la_sess) = crate::la_client::LaClient::load_saved_session() {
+            // 同步鉴权凭据到本地题目解析服务，防止“内部授权未启用”
+            crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
             state.la_session = Some(la_sess.clone());
             // 如果已保存 LA 会话，尝试加载用户个性化授权
             if let Ok(user_features) = crate::la_client::LaClient::fetch_user_features(&la_sess.access_token) {
@@ -66,16 +73,22 @@ impl FepcApp {
                 }
                 state.features_loaded = true;
             }
+            // 优先获取云端分配的设备代码
+            if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&la_sess.access_token) {
+                if !dev_code.trim().is_empty() {
+                    state.session.device_code = dev_code;
+                }
+            }
             // 尝试恢复云端托管的 ETS100 会话
             if let Ok(cloud_sess) = crate::la_client::LaClient::get_cloud_session(&la_sess.access_token, "") {
-                state.session = crate::models::UserSession {
-                    phone: cloud_sess.account_display.clone(),
-                    token: cloud_sess.token.clone(),
-                    device_code: cloud_sess.device_code.clone(),
-                    parent_account_id: cloud_sess.parent_account_id.clone(),
-                    user_name: cloud_sess.account_display.clone(),
-                    is_logged_in: true,
-                };
+                if !cloud_sess.device_code.trim().is_empty() {
+                    state.session.device_code = cloud_sess.device_code.clone();
+                }
+                state.session.phone = cloud_sess.account_display.clone();
+                state.session.token = cloud_sess.token.clone();
+                state.session.parent_account_id = cloud_sess.parent_account_id.clone();
+                state.session.user_name = cloud_sess.account_display.clone();
+                state.session.is_logged_in = true;
                 state.la_cloud_session = Some(cloud_sess);
             }
             // 接入 Ed25519 鉴权平滑门控
@@ -165,8 +178,11 @@ impl FepcApp {
                 user: crate::la_client::LaUser {
                     id: 1337,
                     username: "leitianshuo".to_string(),
+                    role: 0,
+                    role_display: Some("超级管理员".to_string()),
                     member_level: 2,
                     tier: "ultra".to_string(),
+                    member_expire_time: None,
                     avatar_url: None,
                 },
                 access_token: "test".to_string(),
@@ -298,12 +314,20 @@ impl eframe::App for FepcApp {
                 let p = self.state.la_password_input.clone();
                 match crate::la_client::LaClient::login(&u, &p, Some(&token)) {
                     Ok(session) => {
+                        crate::la_client::sync_auth_to_resolver(&session.access_token);
+                        if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&session.access_token) {
+                            if !dev_code.trim().is_empty() {
+                                self.state.session.device_code = dev_code;
+                            }
+                        }
                         let ets_result = crate::la_client::LaClient::get_cloud_session(&session.access_token, "");
                         match ets_result {
                             Ok(cloud_sess) => {
+                                if !cloud_sess.device_code.trim().is_empty() {
+                                    self.state.session.device_code = cloud_sess.device_code.clone();
+                                }
                                 self.state.session.phone = cloud_sess.account_display.clone();
                                 self.state.session.token = cloud_sess.token.clone();
-                                self.state.session.device_code = cloud_sess.device_code.clone();
                                 self.state.session.parent_account_id = cloud_sess.parent_account_id.clone();
                                 self.state.session.is_logged_in = true;
                                 if let Some(name) = cloud_sess.selected_account.get("name").and_then(|v| v.as_str()) {
@@ -623,6 +647,60 @@ impl eframe::App for FepcApp {
                                             });
                                         ui.add_space(8.0);
                                     }
+
+                                    // 常驻公告横条 (可手动关闭，点击可打开详情弹窗或外部链接)
+                                    if !self.state.announcement_banner_dismissed
+                                        && let Some(ref title) = policy.announcement_title
+                                        && !title.trim().is_empty() {
+                                        egui::Frame::new()
+                                            .corner_radius(6.0)
+                                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(0, 120, 215)))
+                                            .fill(if is_dark { Color32::from_rgba_unmultiplied(15, 35, 60, 220) } else { Color32::from_rgb(240, 246, 255) })
+                                            .inner_margin(egui::Margin::symmetric(14, 9))
+                                            .show(ui, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new("📢").size(15.0));
+                                                    let display_msg = policy.notice_message.as_deref()
+                                                        .or(policy.announcement_message.as_deref())
+                                                        .unwrap_or("");
+                                                    let label_text = if display_msg.is_empty() {
+                                                        format!("公告: {}", title)
+                                                    } else {
+                                                        format!("公告: {} - {}", title, display_msg)
+                                                    };
+                                                    let label_resp = ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(label_text)
+                                                                .size(12.5)
+                                                                .color(if is_dark { Color32::from_rgb(220, 235, 255) } else { Color32::from_rgb(20, 40, 70) })
+                                                        ).truncate().sense(egui::Sense::click())
+                                                    );
+                                                    if label_resp.clicked() {
+                                                        self.state.announcement_modal_open = true;
+                                                    }
+                                                    if label_resp.hovered() {
+                                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                                    }
+
+                                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                        if ui.button(RichText::new("✕").size(12.0).color(Color32::from_gray(140))).on_hover_text("关闭本次公告提示").clicked() {
+                                                            self.state.announcement_banner_dismissed = true;
+                                                        }
+                                                        if let Some(ref url) = policy.announcement_url {
+                                                            if !url.trim().is_empty() {
+                                                                if ui.button(RichText::new("🔗 查看链接").size(11.5).color(Color32::from_rgb(0, 120, 215))).clicked() {
+                                                                    let _ = open::that(url);
+                                                                }
+                                                            }
+                                                        }
+                                                        if ui.button(RichText::new("详情").size(11.5)).clicked() {
+                                                            self.state.announcement_modal_open = true;
+                                                        }
+                                                    });
+                                                });
+                                            });
+                                        ui.add_space(8.0);
+                                    }
                                 }
 
                                 // 顶部通知条提示 (紧凑 Fluent 2 InfoBar 结构，平滑进出过渡动效，杜绝生硬抽动)
@@ -862,5 +940,8 @@ impl eframe::App for FepcApp {
 
         // 渲染全局 WinUI 风格用户服务协议与免责声明 (EULA) 模态对话框
         crate::views::render_eula_modal(ui.ctx(), &mut self.state);
+
+        // 渲染全局 WinUI 风格系统公告与版本更新模态对话框
+        crate::views::render_announcement_modal(ui.ctx(), &mut self.state);
     }
 }

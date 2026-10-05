@@ -341,12 +341,28 @@ fn test_la_models_and_session() {
     let user = LaUser {
         id: 1337,
         username: "leitianshuo".to_string(),
+        role: 3,
+        role_display: None,
         member_level: 2,
         tier: "ultra".to_string(),
+        member_expire_time: None,
         avatar_url: None,
     };
     assert_eq!(user.tier_display_name(), "Ultra 会员");
     assert!(user.is_member());
+
+    let super_admin = LaUser {
+        id: 1,
+        username: "admin".to_string(),
+        role: 0,
+        role_display: Some("超级管理员".to_string()),
+        member_level: 0,
+        tier: "free".to_string(),
+        member_expire_time: None,
+        avatar_url: None,
+    };
+    assert_eq!(super_admin.tier_display_name(), "超级管理员 (Ultra)");
+    assert!(super_admin.is_member());
 
     let session = LaSession {
         session_id: "sess_test_123".to_string(),
@@ -400,8 +416,11 @@ fn test_real_la_login() {
                 user: fepc::la_client::LaUser {
                     id: 1337,
                     username: "testaccount".to_string(),
+                    role: 3,
+                    role_display: None,
                     member_level: 2,
                     tier: "ultra".to_string(),
+                    member_expire_time: None,
                     avatar_url: None,
                 },
                 access_token: "test_token".to_string(),
@@ -577,8 +596,11 @@ fn test_la_auth_gating_and_cloud_session_requirement() {
         user: LaUser {
             id: 1337,
             username: "leitianshuo".to_string(),
+            role: 3,
+            role_display: None,
             member_level: 2,
             tier: "ultra".to_string(),
+            member_expire_time: None,
             avatar_url: None,
         },
         access_token: "test_token".to_string(),
@@ -1415,8 +1437,11 @@ fn test_device_list_overflow_protection_and_friendly_names() {
             user: LaUser {
                 id: 1,
                 username: "test_user".to_string(),
+                role: 3,
+                role_display: None,
                 member_level: 1,
                 tier: "pro".to_string(),
+                member_expire_time: None,
                 avatar_url: None,
             },
             access_token: "test_token".to_string(),
@@ -1615,8 +1640,11 @@ fn test_la_sessions_and_password_management() {
             user: LaUser {
                 id: 1,
                 username: "tester".to_string(),
+                role: 3,
+                role_display: None,
                 member_level: 1,
                 tier: "pro".to_string(),
+                member_expire_time: None,
                 avatar_url: None,
             },
             access_token: "test_token".to_string(),
@@ -1868,15 +1896,18 @@ fn test_security_dynamic_auth_engine_and_tamper_proofing() {
     assert!(res_unauth.requires_login);
     assert_eq!(res_unauth.reason, "该功能需要登录后使用");
 
-    // 免费用户测试 (member_level: 0)
+    // 免费用户测试 (member_level: 0, role: 3)
     state.la_session = Some(LaSession {
         session_id: "s1".to_string(),
         device_id: None,
         user: LaUser {
             id: 1,
             username: "free_user".to_string(),
+            role: 3,
+            role_display: None,
             member_level: 0,
             tier: "free".to_string(),
+            member_expire_time: None,
             avatar_url: None,
         },
         access_token: "t1".to_string(),
@@ -1889,15 +1920,18 @@ fn test_security_dynamic_auth_engine_and_tamper_proofing() {
     assert!(res_free.requires_membership);
     assert_eq!(res_free.reason, "声音复刻需要开通专业版会员");
 
-    // Pro 会员测试 (member_level: 1)
+    // Pro 会员测试 (member_level: 1, role: 3)
     state.la_session = Some(LaSession {
         session_id: "s2".to_string(),
         device_id: None,
         user: LaUser {
             id: 2,
             username: "pro_user".to_string(),
+            role: 3,
+            role_display: None,
             member_level: 1,
             tier: "pro".to_string(),
+            member_expire_time: None,
             avatar_url: None,
         },
         access_token: "t2".to_string(),
@@ -1907,12 +1941,34 @@ fn test_security_dynamic_auth_engine_and_tamper_proofing() {
     let res_pro = state.check_feature("voice_clone");
     assert!(res_pro.allowed);
 
-    // 功能处于维护状态测试
+    // 功能处于维护状态测试 (普通会员应被拦截)
     state.features.get_mut("voice_clone").unwrap().status = "disabled".to_string();
     state.features.get_mut("voice_clone").unwrap().reason = Some("算力集群扩容中".to_string());
     let res_maint = state.check_feature("voice_clone");
     assert!(!res_maint.allowed);
     assert_eq!(res_maint.reason, "算力集群扩容中");
+
+    // 超级管理员/管理员特权放行测试 (role: 0 或 1，即使功能处于维护中也直接放行)
+    state.la_session = Some(LaSession {
+        session_id: "s_admin".to_string(),
+        device_id: None,
+        user: LaUser {
+            id: 999,
+            username: "super_admin".to_string(),
+            role: 0,
+            role_display: Some("超级管理员".to_string()),
+            member_level: 0,
+            tier: "free".to_string(),
+            member_expire_time: None,
+            avatar_url: None,
+        },
+        access_token: "t_admin".to_string(),
+        refresh_token: "r_admin".to_string(),
+        cached_at: 0,
+    });
+    let res_admin = state.check_feature("voice_clone");
+    assert!(res_admin.allowed);
+    assert_eq!(res_admin.reason, "管理员特权放行");
 
     // (C) 弹窗状态辅助方法测试
     state.trigger_auth_gate_modal("voice_clone", "声音克隆");

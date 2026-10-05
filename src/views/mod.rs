@@ -22,6 +22,7 @@
 use eframe::egui::{Color32, RichText};
 use fluent_egui::winui::FluentUi;
 
+pub mod announcement_modal;
 pub mod answer_view;
 pub mod auth_gate_modal;
 pub mod auto_complete_view;
@@ -32,6 +33,7 @@ pub mod settings;
 pub mod credits;
 pub mod eula_modal;
 
+pub use announcement_modal::render_announcement_modal;
 pub use auth_gate_modal::render_auth_gate_modal;
 pub use eula_modal::render_eula_modal;
 

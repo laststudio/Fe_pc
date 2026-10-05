@@ -37,19 +37,50 @@ pub struct LaUser {
     pub member_level: i32,
     pub tier: String,
     pub avatar_url: Option<String>,
+    #[serde(default = "default_user_role")]
+    pub role: i32,
+    #[serde(default)]
+    pub role_display: Option<String>,
+    #[serde(default)]
+    pub member_expire_time: Option<String>,
+}
+
+fn default_user_role() -> i32 {
+    3
+}
+
+impl Default for LaUser {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            username: String::new(),
+            member_level: 0,
+            tier: "free".to_string(),
+            avatar_url: None,
+            role: 3,
+            role_display: None,
+            member_expire_time: None,
+        }
+    }
 }
 
 impl LaUser {
-    pub fn tier_display_name(&self) -> &str {
-        match self.tier.to_lowercase().as_str() {
-            "ultra" => "Ultra 会员",
-            "pro" => "Pro 会员",
-            _ => "免费版",
+    pub fn tier_display_name(&self) -> String {
+        if self.role == 0 {
+            "超级管理员 (Ultra)".to_string()
+        } else if self.role == 1 {
+            "管理员 (Ultra)".to_string()
+        } else {
+            match self.tier.to_lowercase().as_str() {
+                "ultra" => "Ultra 会员".to_string(),
+                "pro" => "Pro 会员".to_string(),
+                _ => "免费版".to_string(),
+            }
         }
     }
 
     pub fn is_member(&self) -> bool {
-        self.member_level > 0 || self.tier.eq_ignore_ascii_case("pro") || self.tier.eq_ignore_ascii_case("ultra")
+        self.role <= 1 || self.member_level > 0 || self.tier.eq_ignore_ascii_case("pro") || self.tier.eq_ignore_ascii_case("ultra")
     }
 }
 
@@ -99,6 +130,14 @@ pub struct LaSoftwarePolicy {
     pub announcement_title: Option<String>,
     #[serde(alias = "announcement_message", alias = "message", default)]
     pub announcement_message: Option<String>,
+    #[serde(alias = "notice_message", default)]
+    pub notice_message: Option<String>,
+    #[serde(alias = "update_message", default)]
+    pub update_message: Option<String>,
+    #[serde(alias = "announcement_url", default)]
+    pub announcement_url: Option<String>,
+    #[serde(alias = "changelog_summary", default)]
+    pub changelog_summary: Option<String>,
     #[serde(default)]
     pub features: Value,
 }
@@ -111,7 +150,7 @@ impl LaSoftwarePolicy {
         self.is_force
     }
     pub fn message(&self) -> &str {
-        self.announcement_message.as_deref().unwrap_or("")
+        self.announcement_message.as_deref().or(self.notice_message.as_deref()).unwrap_or("")
     }
 }
 
@@ -559,6 +598,21 @@ impl LaClient {
             .to_string();
 
         let mut session = Self::get_session(&access_token)?;
+        if let Some(user_val) = json_val.get("user") {
+            if let Some(role) = user_val.get("role").and_then(|v| v.as_i64()) {
+                session.user.role = role as i32;
+            }
+            if let Some(rd) = user_val.get("role_display").and_then(|v| v.as_str()) {
+                session.user.role_display = Some(rd.to_string());
+            }
+            if let Some(et) = user_val.get("member_expire_time")
+                .or_else(|| user_val.get("expire_time"))
+                .or_else(|| user_val.get("expires_at"))
+                .and_then(|v| v.as_str())
+            {
+                session.user.member_expire_time = Some(et.to_string());
+            }
+        }
         session.access_token = access_token;
         session.refresh_token = refresh_token;
         session.cached_at = Self::now_secs();
@@ -604,12 +658,25 @@ impl LaClient {
             let uid = user_val.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
             let uname = user_val.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let member_level = user_val.get("member_level").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let role = user_val.get("role").and_then(|v| v.as_i64()).unwrap_or(3) as i32;
+            let role_display = user_val.get("role_display").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let member_expire_time = user_val.get("member_expire_time")
+                .or_else(|| user_val.get("expire_time"))
+                .or_else(|| user_val.get("expires_at"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let tier = user_val.get("tier").and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| match member_level {
-                    2 => "ultra".to_string(),
-                    1 => "pro".to_string(),
-                    _ => "free".to_string(),
+                .unwrap_or_else(|| {
+                    if role <= 1 {
+                        "ultra".to_string()
+                    } else {
+                        match member_level {
+                            2 => "ultra".to_string(),
+                            1 => "pro".to_string(),
+                            _ => "free".to_string(),
+                        }
+                    }
                 });
             let avatar_url = user_val.get("avatar_url").and_then(|v| v.as_str()).map(|s| s.to_string());
 
@@ -619,6 +686,9 @@ impl LaClient {
                 member_level,
                 tier,
                 avatar_url,
+                role,
+                role_display,
+                member_expire_time,
             })
         });
 
@@ -1372,6 +1442,34 @@ pub fn fetch_user_features(access_token: &str) -> Result<Vec<LaFeature>, String>
     LaClient::fetch_user_features(access_token)
 }
 
+/// 将 access_token 同步至 resolver::auth 并开启授权
+pub fn sync_auth_to_resolver(access_token: &str) {
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
+    {
+        resolver::auth::configure_auth(
+            LA_BASE_URL,
+            LA_SOFTWARE_KEY,
+            "cloud_mode",
+            None,
+            LA_APP_VERSION_CODE,
+        ).ok();
+        resolver::auth::set_token(access_token);
+        resolver::auth::set_auth_enabled(true);
+    }
+}
+
+/// 后台异步上报功能调用统计
+pub fn report_feature_usage_async(feature_key: &str) {
+    if let Some(la_sess) = LaClient::load_saved_session() {
+        let token = la_sess.access_token;
+        let key = feature_key.to_string();
+        std::thread::spawn(move || {
+            let _ = LaClient::authorize_feature(&token, &key);
+        });
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1470,6 +1568,75 @@ mod tests {
         assert_eq!(features3[0].feature_key, "answer_parser");
         assert_eq!(features3[0].name, "解析核心");
     }
+
+    #[test]
+    fn test_la_user_role_and_tier_display() {
+        let super_admin = LaUser {
+            id: 1,
+            username: "root".to_string(),
+            member_level: 0,
+            tier: "free".to_string(),
+            avatar_url: None,
+            role: 0,
+            role_display: Some("超级管理员".to_string()),
+            member_expire_time: None,
+        };
+        assert_eq!(super_admin.tier_display_name(), "超级管理员 (Ultra)");
+        assert!(super_admin.is_member());
+
+        let admin = LaUser {
+            id: 2,
+            username: "admin".to_string(),
+            member_level: 0,
+            tier: "free".to_string(),
+            avatar_url: None,
+            role: 1,
+            role_display: Some("管理员".to_string()),
+            member_expire_time: None,
+        };
+        assert_eq!(admin.tier_display_name(), "管理员 (Ultra)");
+        assert!(admin.is_member());
+
+        let pro_user = LaUser {
+            id: 3,
+            username: "pro_user".to_string(),
+            member_level: 1,
+            tier: "pro".to_string(),
+            avatar_url: None,
+            role: 3,
+            role_display: None,
+            member_expire_time: Some("2028-12-31".to_string()),
+        };
+        assert_eq!(pro_user.tier_display_name(), "Pro 会员");
+        assert!(pro_user.is_member());
+
+        let ultra_user = LaUser {
+            id: 4,
+            username: "ultra_user".to_string(),
+            member_level: 2,
+            tier: "ultra".to_string(),
+            avatar_url: None,
+            role: 3,
+            role_display: None,
+            member_expire_time: None,
+        };
+        assert_eq!(ultra_user.tier_display_name(), "Ultra 会员");
+        assert!(ultra_user.is_member());
+
+        let free_user = LaUser {
+            id: 5,
+            username: "free_user".to_string(),
+            member_level: 0,
+            tier: "free".to_string(),
+            avatar_url: None,
+            role: 3,
+            role_display: None,
+            member_expire_time: None,
+        };
+        assert_eq!(free_user.tier_display_name(), "免费版");
+        assert!(!free_user.is_member());
+    }
 }
+
 
 

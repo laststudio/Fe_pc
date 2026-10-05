@@ -198,18 +198,13 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     });
     ui.add_space(8.0);
 
-    // 整合所有可选作业
-    let all_homeworks: Vec<HomeworkItem> = state
-        .homework_items
-        .iter()
-        .cloned()
-        .chain(state.local_items.iter().cloned())
-        .collect();
+    // 整合所有可选作业 (全自动答题仅允许云端试卷)
+    let all_homeworks: Vec<HomeworkItem> = state.homework_items.clone();
 
     if all_homeworks.is_empty() {
-        ui.card("未找到可做作业", "请先在【作业列表】拉取云端作业或在【本地扫描】中检测本地试卷", |ui| {
+        ui.card("未检测到云端作业", "全自动流水线需依赖云端试卷上下文与提交通道，请先前往【作业列表】拉取云端作业", |ui| {
             responsive_flow(ui, |ui| {
-                if accent_action_btn(ui, "📚 前往作业列表", None).clicked() {
+                if accent_action_btn(ui, "📚 前往【作业列表】拉取云端作业", None).clicked() {
                     state.current_tab = NavTab::HomeworkList;
                 }
             });
@@ -720,6 +715,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                         let config_clone = state.auto_config.clone();
 
                         state.auto_running = true;
+                        state.report_feature_usage("auto_complete");
                         state.auto_progress = Some((0, 8, "正在初始化流水线...".to_string()));
                         state.auto_logs.clear();
                         state.auto_questions_done.clear();

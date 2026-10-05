@@ -27,6 +27,9 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         }
     };
 
+    // 异步上报试卷题目解析查看行为
+    state.report_feature_usage("answer_parser");
+
     // 头部导航栏
     responsive_flow(ui, |ui| {
         if action_btn(ui, "⬅ 返回列表").clicked() {
@@ -65,6 +68,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 if !copy_check.allowed {
                     state.trigger_auth_gate_modal("copy_export", "答案复制与导出");
                 } else {
+                    state.report_feature_usage("copy_export");
                     let text = match state.answer_view_mode {
                         AnswerViewMode::Detailed => Exporter::format_full_answers(&hw),
                         AnswerViewMode::Concise => Exporter::format_concise_answers(&hw),
@@ -84,6 +88,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     .add_filter("文本文件", &["txt"])
                     .save_file()
                 {
+                    state.report_feature_usage("copy_export");
                     let text = Exporter::format_full_answers(&hw);
                     if Exporter::save_to_file(&path, &text).is_ok() {
                         state.notification = Some((format!("已成功导出至: {:?}", path), InfoBarKind::Success));
@@ -100,6 +105,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     .add_filter("Markdown 文件", &["md"])
                     .save_file()
                 {
+                    state.report_feature_usage("copy_export");
                     let md = Exporter::format_markdown(&hw);
                     if Exporter::save_to_file(&path, &md).is_ok() {
                         state.notification = Some((format!("已成功导出至: {:?}", path), InfoBarKind::Success));
@@ -218,12 +224,14 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                             if subtle_action_btn(ui, copy_label).clicked()
                                 && let Some(ans) = q.answers.first()
                                     && Exporter::copy_text_to_clipboard(ans).is_ok() {
+                                        state.report_feature_usage("copy_export");
                                         state.notification = Some(("已复制首选答案到剪贴板！".to_string(), InfoBarKind::Success));
                                     }
                             if q.answers.len() > 1
                                 && subtle_action_btn(ui, &format!("复制全部 {} 种表述", q.answers.len())).clicked() {
                                     let text = q.answers.join("\n");
                                     if Exporter::copy_text_to_clipboard(&text).is_ok() {
+                                        state.report_feature_usage("copy_export");
                                         state.notification = Some(("已复制全部备选表述到剪贴板！".to_string(), InfoBarKind::Success));
                                     }
                                 }

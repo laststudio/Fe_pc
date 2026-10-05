@@ -413,6 +413,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         responsive_flow(ui, |ui| {
             let btn_text = if state.tts_testing { "⏳ 正在合成并诊断..." } else { "🔊 测试当前引擎并诊断连通性" };
             if action_btn(ui, btn_text).clicked() && !state.tts_testing {
+                state.report_feature_usage("voice_clone");
                 state.tts_testing = true;
                 state.tts_test_result = Some("正在向所选提供商发送测试请求...".to_string());
                 let settings_clone = state.tts_settings.clone();
@@ -457,9 +458,49 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     ui.add_space(8.0);
 
     ui.card("关于 Fe PC", "软件信息与致谢", |ui| {
+        let accent = state.theme_config.accent;
         ui.label(RichText::new("Fuck ets100 Desktop (Fe PC) v0.1.5").strong().size(15.0));
         ui.label("基于 Rust + fluent-egui + ets_resolver 构建的原生 Windows 11 现代化客户端。");
         ui.label("提供 e听说本地免权限试卷读取、云端作业拉取、全题型精准解析与全自动答题完成。");
+
+        if let Some(ref policy) = state.software_policy {
+            ui.add_space(4.0);
+            ui.separator();
+            ui.label(RichText::new("📢 服务端公告与版本发布说明").strong().color(accent.unwrap_or(Color32::from_rgb(0, 120, 215))));
+            if let Some(ref title) = policy.announcement_title {
+                if !title.trim().is_empty() {
+                    ui.label(RichText::new(format!("📌 当前公告: {}", title)).strong());
+                }
+            }
+            let display_msg = policy.notice_message.as_deref()
+                .or(policy.announcement_message.as_deref())
+                .unwrap_or("");
+            if !display_msg.trim().is_empty() {
+                ui.label(RichText::new(display_msg).size(12.0));
+            }
+            if let Some(ref update) = policy.update_message {
+                if !update.trim().is_empty() {
+                    ui.label(RichText::new(format!("🚀 更新提示: {}", update)).size(12.0).color(Color32::from_rgb(0, 150, 255)));
+                }
+            }
+            if let Some(ref changelog) = policy.changelog_summary {
+                if !changelog.trim().is_empty() {
+                    ui.label(RichText::new(format!("📝 版本变更: {}", changelog)).size(11.5).color(Color32::from_gray(160)));
+                }
+            }
+            responsive_flow(ui, |ui| {
+                if action_btn(ui, "📢 查看公告与版本详情弹窗").clicked() {
+                    state.announcement_modal_open = true;
+                }
+                if let Some(ref url) = policy.announcement_url {
+                    if !url.trim().is_empty() {
+                        if action_btn(ui, "🌐 打开外部公告网页").clicked() {
+                            let _ = open::that(url);
+                        }
+                    }
+                }
+            });
+        }
 
         ui.separator();
 

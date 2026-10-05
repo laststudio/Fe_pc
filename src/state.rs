@@ -112,6 +112,10 @@ pub struct AppState {
     pub eula_modal_open: bool,
     pub eula_checkbox_checked: bool,
     pub eula_is_first_launch: bool,
+
+    // 全局与版本专属公告
+    pub announcement_modal_open: bool,
+    pub announcement_banner_dismissed: bool,
 }
 
 impl Default for AppState {
@@ -199,11 +203,27 @@ impl Default for AppState {
             eula_modal_open: false,
             eula_checkbox_checked: false,
             eula_is_first_launch: false,
+
+            // 全局与版本专属公告
+            announcement_modal_open: false,
+            announcement_banner_dismissed: false,
         }
     }
 }
 
 impl AppState {
+    /// 异步上报功能调用统计 (后台线程无阻塞)
+    pub fn report_feature_usage(&self, feature_key: &str) {
+        let token_opt = self.la_session.as_ref().map(|s| s.access_token.clone())
+            .or_else(|| crate::la_client::LaClient::load_saved_session().map(|s| s.access_token));
+        if let Some(token) = token_opt {
+            let key = feature_key.to_string();
+            std::thread::spawn(move || {
+                let _ = crate::la_client::LaClient::authorize_feature(&token, &key);
+            });
+        }
+    }
+
     /// 动态特性安全鉴权判定引擎 (Themida LION64 White 虚拟机深度混淆防护)
     pub fn check_feature(&self, feature_key: &str) -> crate::la_client::FeatureCheckResult {
         crate::themida_lion_white!({
@@ -212,6 +232,18 @@ impl AppState {
     }
 
     fn evaluate_feature_permission(&self, feature_key: &str) -> crate::la_client::FeatureCheckResult {
+        // 0. 管理员特权直接放行所有功能 (role <= 1)
+        if let Some(session) = &self.la_session {
+            if session.user.role <= 1 {
+                return crate::la_client::FeatureCheckResult {
+                    allowed: true,
+                    reason: "管理员特权放行".to_string(),
+                    required_tier: "ultra".to_string(),
+                    requires_login: false,
+                    requires_membership: false,
+                };
+            }
+        }
         let feature_opt = if self.features_loaded || !self.features.is_empty() {
             self.features.get(feature_key)
         } else {
@@ -436,6 +468,9 @@ mod tests {
                 member_level: level,
                 tier: tier.to_string(),
                 avatar_url: None,
+                role: 3,
+                role_display: None,
+                member_expire_time: None,
             },
             access_token: "mock_token".to_string(),
             refresh_token: "mock_refresh".to_string(),
@@ -479,6 +514,19 @@ mod tests {
         assert!(state.check_feature("answer_parser").allowed);
         assert!(state.check_feature("auto_complete").allowed, "Pro 用户允许使用 auto_complete");
         assert!(state.check_feature("voice_clone").allowed, "Pro 用户允许使用 voice_clone");
+
+        // 4. 管理员用户 (role <= 1): 直接放行所有功能
+        let mut admin_sess = make_session(0, "free");
+        admin_sess.user.role = 0; // 超级管理员
+        state.la_session = Some(admin_sess);
+        assert!(state.check_feature("auto_complete").allowed, "超级管理员直接放行 auto_complete");
+        assert!(state.check_feature("voice_clone").allowed, "超级管理员直接放行 voice_clone");
+
+        let mut admin1_sess = make_session(0, "free");
+        admin1_sess.user.role = 1; // 管理员
+        state.la_session = Some(admin1_sess);
+        assert!(state.check_feature("auto_complete").allowed, "管理员直接放行 auto_complete");
+        assert!(state.check_feature("voice_clone").allowed, "管理员直接放行 voice_clone");
     }
 
     #[test]

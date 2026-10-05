@@ -152,6 +152,10 @@ impl CloudClient {
 
     /// 获取云端作业列表
     pub fn get_homework_list(session: &UserSession, status: &str) -> Result<Vec<HomeworkItem>, String> {
+        if let Some(la_sess) = crate::la_client::LaClient::load_saved_session() {
+            crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+        }
+
         let res = cloud::cloud::cloud_get_homework_list_json(
             &session.token,
             &session.parent_account_id,
@@ -394,6 +398,11 @@ impl CloudClient {
 
     /// 下载并解析云端试卷
     pub fn download_and_parse_homework(session: &UserSession, homework: &HomeworkItem) -> Result<HomeworkItem, String> {
+        if let Some(la_sess) = crate::la_client::LaClient::load_saved_session() {
+            crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+        }
+        crate::la_client::report_feature_usage_async("answer_parser");
+
         // 若为词汇PK或无常规ZIP资源下载链接，直接走 4 级回退链在线获取
         if homework.is_pk_or_vocab() {
             let sections = Self::fetch_and_parse_pk_homework(session, homework)?;
