@@ -32,14 +32,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: laststudio/fluent-egui
-          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           path: fluent-egui
 
       - name: 并列检出 ets_resolver 依赖
         uses: actions/checkout@v4
         with:
           repository: laststudio/ets_resolver
-          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           path: ets_resolver
 
       - name: 配置 Rust 工具链 (x86_64-pc-windows-msvc)
@@ -72,7 +72,7 @@ jobs:
           THEMIDA_ARCHIVE_URL: ${{ secrets.THEMIDA_ARCHIVE_URL }}
           THEMIDA_DECRYPT_KEY: ${{ secrets.THEMIDA_DECRYPT_KEY }}
           THEMIDA_REPO: ${{ vars.THEMIDA_REPO || 'laststudio/themida_tools' }}
-          THEMIDA_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          THEMIDA_TOKEN: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/setup_themida.ps1
 

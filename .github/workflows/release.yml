@@ -54,14 +54,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: laststudio/fluent-egui
-          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           path: fluent-egui
 
       - name: 并列检出 ets_resolver 依赖
         uses: actions/checkout@v4
         with:
           repository: laststudio/ets_resolver
-          token: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           path: ets_resolver
 
       - name: 配置 Rust 工具链 (x86_64-pc-windows-msvc)
@@ -161,7 +161,7 @@ jobs:
           THEMIDA_ARCHIVE_URL: ${{ secrets.THEMIDA_ARCHIVE_URL }}
           THEMIDA_DECRYPT_KEY: ${{ secrets.THEMIDA_DECRYPT_KEY }}
           THEMIDA_REPO: ${{ vars.THEMIDA_REPO || 'laststudio/themida_tools' }}
-          THEMIDA_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          THEMIDA_TOKEN: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/setup_themida.ps1 -Strict
 
@@ -245,14 +245,14 @@ jobs:
             fepc/dist/${{ steps.meta.outputs.zip_name }}
             fepc/dist/sha256sums.txt
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: 发布官方 Release 至 Fuck_ets100_pc
         if: steps.meta.outputs.publish_public == 'true'
         working-directory: fepc
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           $PublicRepo = $env:PUBLIC_RELEASE_REPOSITORY
           $Tag = "${{ steps.meta.outputs.public_tag }}"
@@ -265,7 +265,7 @@ jobs:
           $ShaPath = "dist\sha256sums.txt"
 
           if (-not $env:GH_TOKEN) {
-            Write-Error "[-] 错误: 缺少 PUBLIC_RELEASE_TOKEN Secret，无法发布到公开目标仓库 $PublicRepo"
+            Write-Error "[-] 错误: 缺少 GH_TOKEN Secret，无法发布到公开目标仓库 $PublicRepo"
             exit 1
           }
 
