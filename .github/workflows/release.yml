@@ -94,7 +94,7 @@ jobs:
             if ($CargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
               $Version = $matches[1]
             } else {
-              $Version = "0.1.5"
+              $Version = "0.1.6"
             }
           }
 

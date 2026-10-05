@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 pub const APPLICATION_ID: &str = "cc.lastudio.fepc";
 pub const SIGNING_CERT_SHA256: &str = "79fe6f92aa7f46084832cd62292c223101586b46e3cfaf39740fef1c6253aaca";
-pub const VERSION_CODE: i64 = 105;
+pub const VERSION_CODE: i64 = 106;
 
 #[derive(Serialize, Deserialize, Default)]
 struct SavedDeviceInfo {

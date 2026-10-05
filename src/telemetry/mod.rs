@@ -71,8 +71,8 @@ mod tests {
             installation_id: "inst-999".to_string(),
             platform_device_id: "hw-guid-888".to_string(),
             client_key: "fepc-windows".to_string(),
-            app_version: "0.1.5".to_string(),
-            app_version_code: 105,
+            app_version: "0.1.6".to_string(),
+            app_version_code: 106,
             os_platform: "windows".to_string(),
             os_version: "Windows 11 (Build 22631)".to_string(),
             device_name: "PC-DESKTOP-TEST".to_string(),
@@ -83,7 +83,7 @@ mod tests {
         assert!(json_str.contains("\"occurred_at\": \"2026-10-05T06:00:00Z\""));
         assert!(json_str.contains("\"error_type\": \"panic\""));
         assert!(json_str.contains("\"client_key\": \"fepc-windows\""));
-        assert!(json_str.contains("\"app_version_code\": 105"));
+        assert!(json_str.contains("\"app_version_code\": 106"));
 
         let deserialized: CrashReport =
             serde_json::from_str(&json_str).expect("Deserialize CrashReport failed");
@@ -153,8 +153,8 @@ mod tests {
                 installation_id: "test".to_string(),
                 platform_device_id: "test".to_string(),
                 client_key: "fepc-windows".to_string(),
-                app_version: "0.1.5".to_string(),
-                app_version_code: 105,
+                app_version: "0.1.6".to_string(),
+                app_version_code: 106,
                 os_platform: "windows".to_string(),
                 os_version: "11".to_string(),
                 device_name: "test".to_string(),
@@ -238,7 +238,7 @@ mod tests {
                 let req_text = read_http_request(&mut stream);
                 assert!(req_text.contains("/client-telemetry/launch"));
                 assert!(req_text.contains("X-Client-Key: fepc-windows"));
-                assert!(req_text.contains("X-App-Version-Code: 105"));
+                assert!(req_text.contains("X-App-Version-Code: 106"));
 
                 let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"success\":true}";
                 let _ = stream.write_all(response.as_bytes());

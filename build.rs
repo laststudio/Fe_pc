@@ -15,8 +15,8 @@ fn main() {
     res.set("ProductName", "Fe PC");
     res.set("OriginalFilename", "fepc.exe");
     res.set("LegalCopyright", "Copyright (C) 2026 code-leitianshuo(leitianshuo1337)");
-    res.set("ProductVersion", "v0.1.5");
-    res.set("FileVersion", "0.1.5.0");
+    res.set("ProductVersion", "v0.1.6");
+    res.set("FileVersion", "0.1.6.0");
     if let Err(e) = res.compile() {
         eprintln!("Warning: Failed to compile Windows resource: {}", e);
     }

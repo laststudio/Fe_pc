@@ -10,7 +10,7 @@ use crate::utils::device_info;
 pub const LA_BASE_URL: &str = "https://api.lastudio.cc";
 pub const LA_SOFTWARE_KEY: &str = "fepc";
 pub const LA_CLIENT_KEY: &str = "fepc-windows";
-pub const LA_APP_VERSION_CODE: i64 = 105;
+pub const LA_APP_VERSION_CODE: i64 = 106;
 
 pub fn get_user_agent() -> String {
     let pkg_ver = env!("CARGO_PKG_VERSION");

@@ -288,7 +288,7 @@ fn test_device_fingerprint() {
     assert_eq!(payload["application_id"], fepc::utils::device_info::APPLICATION_ID);
     assert_eq!(payload["application_id"], "cc.lastudio.fepc");
     assert_eq!(payload["signing_certificate_sha256"], "79fe6f92aa7f46084832cd62292c223101586b46e3cfaf39740fef1c6253aaca");
-    assert_eq!(payload["version_code"], 105);
+    assert_eq!(payload["version_code"], 106);
     assert_eq!(payload["platform"], "windows");
     assert_eq!(payload["installation_id"], inst_id);
     assert_eq!(payload["platform_device_id"], platform_id);
@@ -1531,10 +1531,10 @@ fn test_la_constants_and_headers() {
     assert_eq!(LA_BASE_URL, "https://api.lastudio.cc");
     assert_eq!(LA_SOFTWARE_KEY, "fepc");
     assert_eq!(LA_CLIENT_KEY, "fepc-windows");
-    assert_eq!(LA_APP_VERSION_CODE, 105);
+    assert_eq!(LA_APP_VERSION_CODE, 106);
 
     assert_eq!(APPLICATION_ID, "cc.lastudio.fepc");
-    assert_eq!(VERSION_CODE, 105);
+    assert_eq!(VERSION_CODE, 106);
 
     let ua = get_user_agent();
     println!("Generated User-Agent: {}", ua);

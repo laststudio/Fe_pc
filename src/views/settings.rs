@@ -459,7 +459,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     ui.card("关于 Fe PC", "软件信息与致谢", |ui| {
         let accent = state.theme_config.accent;
-        ui.label(RichText::new("Fuck ets100 Desktop (Fe PC) v0.1.5").strong().size(15.0));
+        ui.label(RichText::new("Fuck ets100 Desktop (Fe PC) v0.1.6").strong().size(15.0));
         ui.label("基于 Rust + fluent-egui + ets_resolver 构建的原生 Windows 11 现代化客户端。");
         ui.label("提供 e听说本地免权限试卷读取、云端作业拉取、全题型精准解析与全自动答题完成。");
 
