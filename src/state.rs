@@ -224,11 +224,9 @@ impl AppState {
         }
     }
 
-    /// 动态特性安全鉴权判定引擎 (Themida LION64 White 虚拟机深度混淆防护)
+    /// 动态特性安全鉴权判定引擎
     pub fn check_feature(&self, feature_key: &str) -> crate::la_client::FeatureCheckResult {
-        crate::themida_lion_white!({
-            self.evaluate_feature_permission(feature_key)
-        })
+        self.evaluate_feature_permission(feature_key)
     }
 
     fn evaluate_feature_permission(&self, feature_key: &str) -> crate::la_client::FeatureCheckResult {

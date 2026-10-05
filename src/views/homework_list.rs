@@ -30,6 +30,10 @@ fn refresh_current_category(state: &mut AppState) {
         return;
     }
 
+    if let Some(ref la_sess) = state.la_session {
+        crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+    }
+
     match state.selected_category {
         HomeworkCategory::Current => {
             match CloudClient::get_homework_list(&state.session, "1") {
@@ -113,7 +117,17 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
             ui.separator();
 
-            ui.add(egui::TextEdit::singleline(&mut state.search_filter).hint_text("🔍 搜索试卷或 ID...").desired_width(180.0));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(RichText::new("🔍").size(13.0).color(Color32::from_gray(160)));
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.search_filter)
+                        .hint_text("搜索试卷或 ID...")
+                        .desired_width(160.0)
+                        .vertical_align(egui::Align::Center)
+                        .margin(egui::Margin::symmetric(6, 4))
+                );
+            });
 
             ui.separator();
 

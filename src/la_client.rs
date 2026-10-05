@@ -1442,19 +1442,34 @@ pub fn fetch_user_features(access_token: &str) -> Result<Vec<LaFeature>, String>
     LaClient::fetch_user_features(access_token)
 }
 
-/// 将 access_token 同步至 resolver::auth 并开启授权
+/// 将 access_token 同步至 resolver::auth 与 cloud::auth 并开启内部授权
 pub fn sync_auth_to_resolver(access_token: &str) {
     #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     {
+        let token = access_token.trim();
+        let enabled = !token.is_empty();
+
+        // 1. 同步题目解析引擎 (resolver)
         resolver::auth::configure_auth(
+            LA_BASE_URL,
+            LA_SOFTWARE_KEY,
+            "answer_parser",
+            None,
+            LA_APP_VERSION_CODE,
+        ).ok();
+        resolver::auth::set_token(token);
+        resolver::auth::set_auth_enabled(enabled);
+
+        // 2. 同步云端接口与作业下载引擎 (cloud)
+        cloud::auth::configure_auth(
             LA_BASE_URL,
             LA_SOFTWARE_KEY,
             "cloud_mode",
             None,
             LA_APP_VERSION_CODE,
         ).ok();
-        resolver::auth::set_token(access_token);
-        resolver::auth::set_auth_enabled(true);
+        cloud::auth::set_token(token);
+        cloud::auth::set_auth_enabled(enabled);
     }
 }
 
