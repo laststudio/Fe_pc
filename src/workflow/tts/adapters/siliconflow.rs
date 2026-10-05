@@ -178,14 +178,8 @@ impl TtsEngine for SiliconFlowAdapter {
 
         let speed = req.speed.unwrap_or(self.config.speed);
 
-        // OpenAI 兼容请求格式
-        let payload = serde_json::json!({
-            "model": model,
-            "input": clean_text,
-            "voice": voice_to_use,
-            "response_format": "mp3",
-            "speed": speed
-        });
+        // OpenAI 兼容请求格式 (Tier 4: FALCON64 Tiny VM)
+        let payload = build_siliconflow_payload(model, clean_text, &voice_to_use, speed);
 
         let resp = ureq::post(endpoint)
             .timeout(Duration::from_secs(45))
@@ -233,4 +227,22 @@ impl TtsEngine for SiliconFlowAdapter {
 
         Ok(TtsResponse::new(audio_bytes, AudioFormat::Mp3, "siliconflow"))
     }
+}
+
+#[inline(never)]
+fn build_siliconflow_payload(
+    model: &str,
+    clean_text: &str,
+    voice: &str,
+    speed: f64,
+) -> serde_json::Value {
+    crate::themida_falcon_tiny!({
+        serde_json::json!({
+            "model": model,
+            "input": clean_text,
+            "voice": voice,
+            "response_format": "mp3",
+            "speed": speed
+        })
+    })
 }

@@ -364,20 +364,23 @@ pub fn get_or_fetch_signing_public_key_b64() -> Option<String> {
     }
 }
 
-/// 利用 ring 校验 Ed25519 签名与响应 body 防篡改
+/// 利用 ring 校验 Ed25519 签名与响应 body 防篡改 (Tier 1: LION64 White VM)
+#[inline(never)]
 pub fn verify_signature(
     body: &[u8],
     signature_str: &str,
     public_key_bytes: &[u8],
 ) -> Result<(), String> {
-    let sig_bytes = decode_signature_bytes(signature_str)
-        .ok_or_else(|| "X-Signature 格式错误或长度不是 64 字节".to_string())?;
+    crate::themida_lion_white!({
+        let sig_bytes = decode_signature_bytes(signature_str)
+            .ok_or_else(|| "X-Signature 格式错误或长度不是 64 字节".to_string())?;
 
-    let peer_public_key =
-        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key_bytes);
-    peer_public_key
-        .verify(body, &sig_bytes)
-        .map_err(|_| "Ed25519 签名校验失败: 数据可能被篡改或伪造".to_string())
+        let peer_public_key =
+            ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key_bytes);
+        peer_public_key
+            .verify(body, &sig_bytes)
+            .map_err(|_| "Ed25519 签名校验失败: 数据可能被篡改或伪造".to_string())
+    })
 }
 
 /// 校验服务端响应的签名 (使用默认/动态公钥)
@@ -1059,13 +1062,16 @@ impl LaClient {
                         val
                     };
 
-                    let policy = serde_json::from_value::<LaSoftwarePolicy>(policy_val)
-                        .map_err(|e| format!("解析策略数据模型失败: {e}"))?;
-                    if let Some(bytes) = policy.signing_public_key.as_deref().and_then(decode_public_key_bytes) {
-                        if let Ok(mut lock) = DYNAMIC_SIGNING_PUBLIC_KEY.write() {
-                            *lock = Some(bytes);
+                    let policy = crate::themida_tiger_white!({
+                        let p = serde_json::from_value::<LaSoftwarePolicy>(policy_val)
+                            .map_err(|e| format!("解析策略数据模型失败: {e}"))?;
+                        if let Some(bytes) = p.signing_public_key.as_deref().and_then(decode_public_key_bytes) {
+                            if let Ok(mut lock) = DYNAMIC_SIGNING_PUBLIC_KEY.write() {
+                                *lock = Some(bytes);
+                            }
                         }
-                    }
+                        Ok::<LaSoftwarePolicy, String>(p)
+                    })?;
                     return Ok(policy);
                 }
                 Err(ureq::Error::Status(404, _)) => {

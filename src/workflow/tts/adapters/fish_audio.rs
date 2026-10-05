@@ -21,7 +21,8 @@ impl FishAudioAdapter {
         }
     }
 
-    /// 构造标准 multipart/form-data 二进制负载（包含参考音频 0-shot 极速克隆）
+    /// 构造标准 multipart/form-data 二进制负载（包含参考音频 0-shot 极速克隆）(Tier 4: FALCON64 Tiny VM)
+    #[inline(never)]
     pub fn build_multipart_payload(
         text: &str,
         model: &str,
@@ -29,54 +30,56 @@ impl FishAudioAdapter {
         reference_id: Option<&str>,
         boundary: &str,
     ) -> Vec<u8> {
-        let mut body = Vec::new();
+        crate::themida_falcon_tiny!({
+            let mut body = Vec::new();
 
-        // 字段: text
-        body.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n{text}\r\n")
-                .as_bytes(),
-        );
-
-        // 字段: model
-        body.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n")
-                .as_bytes(),
-        );
-
-        // 字段: format
-        body.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"format\"\r\n\r\nmp3\r\n")
-                .as_bytes(),
-        );
-
-        // 字段: reference_id (可选音色模板 ID)
-        if let Some(ref_id) = reference_id.filter(|s| !s.trim().is_empty()) {
+            // 字段: text
             body.extend_from_slice(
-                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"reference_id\"\r\n\r\n{ref_id}\r\n")
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n{text}\r\n")
                     .as_bytes(),
             );
-        }
 
-        // 字段: reference_audio (参考音频二进制附件)
-        let (filename, content_type) = if reference_audio.starts_with(b"RIFF") {
-            ("reference.wav", "audio/wav")
-        } else {
-            ("reference.mp3", "audio/mpeg")
-        };
+            // 字段: model
+            body.extend_from_slice(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n")
+                    .as_bytes(),
+            );
 
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"reference_audio\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(reference_audio);
-        body.extend_from_slice(b"\r\n");
+            // 字段: format
+            body.extend_from_slice(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"format\"\r\n\r\nmp3\r\n")
+                    .as_bytes(),
+            );
 
-        // 结束 boundary
-        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+            // 字段: reference_id (可选音色模板 ID)
+            if let Some(ref_id) = reference_id.filter(|s| !s.trim().is_empty()) {
+                body.extend_from_slice(
+                    format!("--{boundary}\r\nContent-Disposition: form-data; name=\"reference_id\"\r\n\r\n{ref_id}\r\n")
+                        .as_bytes(),
+                );
+            }
 
-        body
+            // 字段: reference_audio (参考音频二进制附件)
+            let (filename, content_type) = if reference_audio.starts_with(b"RIFF") {
+                ("reference.wav", "audio/wav")
+            } else {
+                ("reference.mp3", "audio/mpeg")
+            };
+
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"reference_audio\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(reference_audio);
+            body.extend_from_slice(b"\r\n");
+
+            // 结束 boundary
+            body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+            body
+        })
     }
 }
 
@@ -146,17 +149,7 @@ impl TtsEngine for FishAudioAdapter {
                 .send_bytes(&body)
         } else {
             // 常规纯文本合成（JSON 模式）
-            let mut payload = serde_json::json!({
-                "text": clean_text,
-                "format": "mp3",
-                "model": model,
-            });
-            if let Some(vid) = voice_id {
-                payload["reference_id"] = serde_json::Value::String(vid.to_string());
-            }
-            if let Some(spd) = req.speed {
-                payload["speed"] = serde_json::Value::from(spd);
-            }
+            let payload = build_fish_json_payload(clean_text, model, voice_id, req.speed);
             http_req
                 .set("Content-Type", "application/json")
                 .send_json(payload)
@@ -202,4 +195,27 @@ impl TtsEngine for FishAudioAdapter {
 
         Ok(TtsResponse::new(audio_bytes, AudioFormat::Mp3, "fish_audio"))
     }
+}
+
+#[inline(never)]
+fn build_fish_json_payload(
+    clean_text: &str,
+    model: &str,
+    voice_id: Option<&str>,
+    speed: Option<f64>,
+) -> serde_json::Value {
+    crate::themida_falcon_tiny!({
+        let mut payload = serde_json::json!({
+            "text": clean_text,
+            "format": "mp3",
+            "model": model,
+        });
+        if let Some(vid) = voice_id {
+            payload["reference_id"] = serde_json::Value::String(vid.to_string());
+        }
+        if let Some(spd) = speed {
+            payload["speed"] = serde_json::Value::from(spd);
+        }
+        payload
+    })
 }

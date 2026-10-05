@@ -189,19 +189,21 @@ fn sample_weighted(rng: &mut XorShift64, weights: &[f64], count: usize) -> Vec<u
     picked
 }
 
-/// 加权随机拟真控分规划
+/// 加权随机拟真控分规划 (Tier 5: themida_mutate! 指令级代码变异混淆)
+#[inline(never)]
 pub fn plan_question_allocations(
     questions: &[crate::models::ParsedQuestion],
     target_total: f64,
     seed: u64,
     allow_over_max: bool,
 ) -> Vec<QuestionAllocation> {
-    let n = questions.len();
-    if n == 0 {
-        return Vec::new();
-    }
+    crate::themida_mutate!({
+        let n = questions.len();
+        if n == 0 {
+            return Vec::new();
+        }
 
-    let mut rng = XorShift64::new(seed);
+        let mut rng = XorShift64::new(seed);
     let target = target_total.max(0.0);
 
     // 确定考卷标准总分
@@ -710,131 +712,135 @@ pub fn plan_question_allocations(
         }
     }
 
-    allocations
+        allocations
+    })
 }
 
-/// 智能作答耗时计算与秒级哈希抖动
+/// 智能作答耗时计算与秒级哈希抖动 (Tier 5: themida_mutate! 指令级代码变异混淆)
+#[inline(never)]
 pub fn calculate_smart_use_time(homework: &crate::models::HomeworkItem, nonce: u64) -> (u32, UseTimeBreakdown) {
-    let mut prep_sec: u32 = 0;
-    let mut listen_sec: u32 = 0;
-    let mut answer_sec: u32 = 0;
-    let mut overhead_sec: u32 = 0;
+    crate::themida_mutate!({
+        let mut prep_sec: u32 = 0;
+        let mut listen_sec: u32 = 0;
+        let mut answer_sec: u32 = 0;
+        let mut overhead_sec: u32 = 0;
 
-    let sec_count = homework.sections.len() as u32;
+        let sec_count = homework.sections.len() as u32;
 
-    if sec_count > 0 {
-        // 大题引导 15s
-        overhead_sec += sec_count * 15;
+        if sec_count > 0 {
+            // 大题引导 15s
+            overhead_sec += sec_count * 15;
 
-        for sec in &homework.sections {
-            let is_read_sec = sec.title.contains("朗读")
-                || sec.section_type.contains("read")
-                || sec.title.to_lowercase().contains("read");
-            let is_double_sec = sec.title.contains("听选")
-                || sec.title.contains("转述")
-                || sec.title.contains("复述")
-                || sec.section_type.contains("listen_choose")
-                || sec.section_type.contains("repeat");
+            for sec in &homework.sections {
+                let is_read_sec = sec.title.contains("朗读")
+                    || sec.section_type.contains("read")
+                    || sec.title.to_lowercase().contains("read");
+                let is_double_sec = sec.title.contains("听选")
+                    || sec.title.contains("转述")
+                    || sec.title.contains("复述")
+                    || sec.section_type.contains("listen_choose")
+                    || sec.section_type.contains("repeat");
 
-            for (q_idx, q) in sec.questions.iter().enumerate() {
-                // 小题缓冲 5s
-                overhead_sec += 5;
+                for (q_idx, q) in sec.questions.iter().enumerate() {
+                    // 小题缓冲 5s
+                    overhead_sec += 5;
 
-                let is_obj = is_objective_question(q);
-                let cat_lower = q.category.to_lowercase();
-                let is_double_q = is_double_sec
-                    || cat_lower.contains("听选")
-                    || cat_lower.contains("转述")
-                    || cat_lower.contains("复述")
-                    || cat_lower.contains("repeat")
-                    || cat_lower.contains("listen_choose");
+                    let is_obj = is_objective_question(q);
+                    let cat_lower = q.category.to_lowercase();
+                    let is_double_q = is_double_sec
+                        || cat_lower.contains("听选")
+                        || cat_lower.contains("转述")
+                        || cat_lower.contains("复述")
+                        || cat_lower.contains("repeat")
+                        || cat_lower.contains("listen_choose");
 
-                // 准备时长：朗读大题首题 50s，其余口语题 8s
-                if is_read_sec && q_idx == 0 {
-                    prep_sec += 50;
-                } else if !is_obj {
-                    prep_sec += 8;
-                }
-
-                // 听题时长：若含两遍题型（听选信息、转述等）乘 2
-                let is_listen_q = is_double_q
-                    || sec.title.contains("听")
-                    || cat_lower.contains("listen")
-                    || is_obj
-                    || cat_lower.contains("dialogue");
-                if is_listen_q {
-                    let prompt_w = count_words(&q.prompt_text);
-                    let mut q_listen = (prompt_w as f64 / 2.2).max(5.0);
-                    if is_double_q {
-                        q_listen *= 2.0;
+                    // 准备时长：朗读大题首题 50s，其余口语题 8s
+                    if is_read_sec && q_idx == 0 {
+                        prep_sec += 50;
+                    } else if !is_obj {
+                        prep_sec += 8;
                     }
-                    listen_sec += q_listen.round() as u32;
-                }
 
-                // 作答时长：单词数 / 2.2
-                if is_obj {
-                    answer_sec += 4;
-                } else {
-                    let ans_text = if !q.answers.is_empty() {
-                        q.answers.join(" ")
-                    } else if !q.prompt_text.is_empty() {
-                        q.prompt_text.clone()
+                    // 听题时长：若含两遍题型（听选信息、转述等）乘 2
+                    let is_listen_q = is_double_q
+                        || sec.title.contains("听")
+                        || cat_lower.contains("listen")
+                        || is_obj
+                        || cat_lower.contains("dialogue");
+                    if is_listen_q {
+                        let prompt_w = count_words(&q.prompt_text);
+                        let mut q_listen = (prompt_w as f64 / 2.2).max(5.0);
+                        if is_double_q {
+                            q_listen *= 2.0;
+                        }
+                        listen_sec += q_listen.round() as u32;
+                    }
+
+                    // 作答时长：单词数 / 2.2
+                    if is_obj {
+                        answer_sec += 4;
                     } else {
-                        String::new()
-                    };
-                    let words = count_words(&ans_text);
-                    let q_ans = if words > 0 {
-                        (words as f64 / 2.2).max(3.0)
-                    } else {
-                        5.0
-                    };
-                    answer_sec += q_ans.round() as u32;
+                        let ans_text = if !q.answers.is_empty() {
+                            q.answers.join(" ")
+                        } else if !q.prompt_text.is_empty() {
+                            q.prompt_text.clone()
+                        } else {
+                            String::new()
+                        };
+                        let words = count_words(&ans_text);
+                        let q_ans = if words > 0 {
+                            (words as f64 / 2.2).max(3.0)
+                        } else {
+                            5.0
+                        };
+                        answer_sec += q_ans.round() as u32;
+                    }
                 }
             }
+        } else {
+            let q_cnt = homework.question_count.max(1) as u32;
+            overhead_sec = 15 + q_cnt * 5;
+            prep_sec = 50 + q_cnt.saturating_sub(1) * 8;
+            listen_sec = q_cnt * 6;
+            answer_sec = q_cnt * 5;
         }
-    } else {
-        let q_cnt = homework.question_count.max(1) as u32;
-        overhead_sec = 15 + q_cnt * 5;
-        prep_sec = 50 + q_cnt.saturating_sub(1) * 8;
-        listen_sec = q_cnt * 6;
-        answer_sec = q_cnt * 5;
-    }
 
-    let base_total = prep_sec + listen_sec + answer_sec + overhead_sec;
+        let base_total = prep_sec + listen_sec + answer_sec + overhead_sec;
 
-    // 散列秒数抖动：使用作业 ID + nonce 的哈希生成 ±12% 抖动，结果四舍五入到具体秒数
-    let mut h = 0xcbf29ce484222325u64;
-    for b in homework.id.as_bytes() {
-        h ^= *b as u64;
+        // 散列秒数抖动：使用作业 ID + nonce 的哈希生成 ±12% 抖动，结果四舍五入到具体秒数
+        let mut h = 0xcbf29ce484222325u64;
+        for b in homework.id.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h ^= nonce;
         h = h.wrapping_mul(0x100000001b3);
-    }
-    h ^= nonce;
-    h = h.wrapping_mul(0x100000001b3);
 
-    // [0, 9999] 映射至 [-0.12, +0.12]
-    let jitter_frac = -0.12 + ((h % 10000) as f64 / 9999.0) * 0.24;
-    let jittered = (base_total as f64 * (1.0 + jitter_frac) + 0.5).floor() as u32;
+        // [0, 9999] 映射至 [-0.12, +0.12]
+        let jitter_frac = -0.12 + ((h % 10000) as f64 / 9999.0) * 0.24;
+        let jittered = (base_total as f64 * (1.0 + jitter_frac) + 0.5).floor() as u32;
 
-    let is_mock = homework.name.contains("模拟") || homework.name.contains("听说") || homework.set_type == 1;
-    let is_pk = homework.pk == 1 || homework.set_type == 6;
+        let is_mock = homework.name.contains("模拟") || homework.name.contains("听说") || homework.set_type == 1;
+        let is_pk = homework.pk == 1 || homework.set_type == 6;
 
-    let final_total = if is_mock {
-        jittered.max(180)
-    } else if is_pk {
-        jittered.max(30)
-    } else {
-        jittered.max(60)
-    };
+        let final_total = if is_mock {
+            jittered.max(180)
+        } else if is_pk {
+            jittered.max(30)
+        } else {
+            jittered.max(60)
+        };
 
-    let breakdown = UseTimeBreakdown {
-        prep_seconds: prep_sec,
-        listen_seconds: listen_sec,
-        answer_seconds: answer_sec,
-        overhead_seconds: overhead_sec,
-        total_seconds: final_total,
-    };
+        let breakdown = UseTimeBreakdown {
+            prep_seconds: prep_sec,
+            listen_seconds: listen_sec,
+            answer_seconds: answer_sec,
+            overhead_seconds: overhead_sec,
+            total_seconds: final_total,
+        };
 
-    (final_total, breakdown)
+        (final_total, breakdown)
+    })
 }
 
 pub fn reroll_time_jitter(homework: &crate::models::HomeworkItem, nonce: u64) -> u32 {

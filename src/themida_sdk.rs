@@ -204,7 +204,9 @@ macro_rules! themida_mutate {
     ($($body:tt)*) => {{
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_MUTATE_ONLY_START(); }
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         let result = { $($body)* };
+        ::std::sync::atomic::compiler_fence(::std::sync::atomic::Ordering::SeqCst);
         #[allow(unused_unsafe)]
         unsafe { $crate::themida_sdk::VM_MUTATE_ONLY_END(); }
         result

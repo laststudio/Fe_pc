@@ -128,23 +128,7 @@ impl TtsEngine for MiniMaxAdapter {
         let speed = req.speed.unwrap_or(self.config.speed);
         let pitch = req.pitch.unwrap_or(self.config.pitch);
 
-        let payload = serde_json::json!({
-            "model": model,
-            "text": clean_text,
-            "stream": false,
-            "voice_setting": {
-                "voice_id": voice_id,
-                "speed": speed,
-                "pitch": pitch,
-                "vol": 1.0
-            },
-            "audio_setting": {
-                "sample_rate": 32000,
-                "bitrate": 128000,
-                "format": "mp3",
-                "channel": 1
-            }
-        });
+        let payload = build_minimax_payload(model, clean_text, voice_id, speed, pitch);
 
         let resp = ureq::post(&endpoint)
             .timeout(Duration::from_secs(45))
@@ -192,4 +176,33 @@ impl TtsEngine for MiniMaxAdapter {
 
         Ok(TtsResponse::new(audio_bytes, AudioFormat::Mp3, "minimax"))
     }
+}
+
+#[inline(never)]
+fn build_minimax_payload(
+    model: &str,
+    clean_text: &str,
+    voice_id: &str,
+    speed: f64,
+    pitch: i32,
+) -> serde_json::Value {
+    crate::themida_falcon_tiny!({
+        serde_json::json!({
+            "model": model,
+            "text": clean_text,
+            "stream": false,
+            "voice_setting": {
+                "voice_id": voice_id,
+                "speed": speed,
+                "pitch": pitch,
+                "vol": 1.0
+            },
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 128000,
+                "format": "mp3",
+                "channel": 1
+            }
+        })
+    })
 }

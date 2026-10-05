@@ -84,20 +84,7 @@ impl TtsEngine for MimoAdapter {
             return Err("MiMo 语音克隆需要提供参考音频或有效 voice DataURL".to_string());
         };
 
-        let payload = serde_json::json!({
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": clean_text
-                }
-            ],
-            "audio": {
-                "format": "mp3",
-                "voice": voice_uri
-            },
-            "stream": false
-        });
+        let payload = build_mimo_payload(model_name, clean_text, &voice_uri);
 
         let resp = ureq::post(endpoint_url)
             .timeout(Duration::from_secs(45))
@@ -140,4 +127,28 @@ impl TtsEngine for MimoAdapter {
 
         Ok(TtsResponse::new(audio_bytes, AudioFormat::Mp3, "mimo"))
     }
+}
+
+#[inline(never)]
+fn build_mimo_payload(
+    model_name: &str,
+    clean_text: &str,
+    voice_uri: &str,
+) -> serde_json::Value {
+    crate::themida_falcon_tiny!({
+        serde_json::json!({
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": clean_text
+                }
+            ],
+            "audio": {
+                "format": "mp3",
+                "voice": voice_uri
+            },
+            "stream": false
+        })
+    })
 }

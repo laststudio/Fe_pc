@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -488,155 +488,10 @@ impl CloudClient {
             let _ = fs::remove_file(&zip_dest);
 
             // 解析 content.json
-            let content_file = part_dir.join("content.json");
-            if content_file.exists()
-                && let Ok(c_str) = fs::read_to_string(&content_file)
-                && let Ok(content_val) = serde_json::from_str::<Value>(&c_str) {
-                    let content2_val = part_dir.join("content2.json").exists().then(|| {
-                            fs::read_to_string(part_dir.join("content2.json"))
-                                .ok()
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                        }).flatten();
-
-                        let info_val = part_dir.join("info.json").exists().then(|| {
-                            fs::read_to_string(part_dir.join("info.json"))
-                                .ok()
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                        }).flatten();
-
-                        let structure_type = content_val.get("structure_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("未知题型")
-                            .to_string();
-
-                        let raw_questions = resolver::api::parse_task(
-                            &content_val,
-                            content2_val.as_ref(),
-                            info_val.as_ref(),
-                        );
-
-                        let mut questions = Vec::new();
-                        for raw_q in raw_questions {
-                            question_counter += 1;
-                            let no = raw_q.get("no").map(|v| match v {
-                                Value::Number(n) => n.to_string(),
-                                Value::String(s) => s.clone(),
-                                _ => question_counter.to_string(),
-                            }).unwrap_or_else(|| question_counter.to_string());
-
-                            let cat = raw_q.get("category").and_then(|v| v.as_str()).unwrap_or(&structure_type).to_string();
-                            let prompt = raw_q
-                                .get("question")
-                                .or_else(|| raw_q.get("text"))
-                                .or_else(|| raw_q.get("prompt"))
-                                .or_else(|| raw_q.get("ask"))
-                                .or_else(|| raw_q.get("content"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            let mut answers = Vec::new();
-                            if let Some(ans_val) = raw_q.get("answers").or_else(|| raw_q.get("answer")) {
-                                match ans_val {
-                                    Value::Array(arr) => {
-                                        for a in arr {
-                                            if let Some(s) = a.as_str() {
-                                                let s_trim = s.trim();
-                                                if !s_trim.is_empty() {
-                                                    answers.push(s_trim.to_string());
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Value::String(s) => {
-                                        let s_trim = s.trim();
-                                        if !s_trim.is_empty() {
-                                            answers.push(s_trim.to_string());
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-
-                            let mut important_points = Vec::new();
-                            if let Some(Value::Array(arr)) = raw_q.get("important") {
-                                for item in arr {
-                                    if let Some(s) = item.as_str()
-                                        && !s.is_empty() {
-                                            important_points.push(s.to_string());
-                                        }
-                                }
-                            }
-
-                            let mut options = Vec::new();
-                            if let Some(opts) = raw_q.get("options").and_then(|v| v.as_array()) {
-                                for opt in opts {
-                                    match opt {
-                                        Value::String(s) => {
-                                            let trimmed = s.trim();
-                                            let (label, text) = if let Some((l, r)) = trimmed.split_once('.') {
-                                                if l.chars().count() == 1 {
-                                                    (l.trim().to_string(), r.trim().to_string())
-                                                } else {
-                                                    ("".to_string(), trimmed.to_string())
-                                                }
-                                            } else {
-                                                ("".to_string(), trimmed.to_string())
-                                            };
-                                            options.push(QuestionOption { label, text, image_path: None });
-                                        }
-                                        Value::Object(obj) => {
-                                            let label = obj.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                            let text = obj.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                            let img = obj.get("image").or_else(|| obj.get("image_path")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                                            options.push(QuestionOption { label, text, image_path: img });
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-
-                            let audio_file = raw_q.get("audio").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let word_id = raw_q.get("word_id").and_then(|v| v.as_i64());
-                            let question_id = raw_q.get("question_id").and_then(|v| v.as_i64());
-
-                            questions.push(ParsedQuestion {
-                                index: question_counter - 1,
-                                number: no,
-                                category: cat,
-                                prompt_text: prompt,
-                                answers,
-                                important_points,
-                                audio_file,
-                                options,
-                                word_id,
-                                question_id,
-                            });
-                        }
-
-                        if !questions.is_empty() {
-                            let friendly_title = match structure_type.as_str() {
-                                "collector.choose" => "听后选择".to_string(),
-                                "collector.read" => "短文朗读".to_string(),
-                                "collector.picture" => "看图说话".to_string(),
-                                "collector.fill" => "听后填空".to_string(),
-                                "collector.role" | "collector.role_play" => "角色扮演".to_string(),
-                                "collector.dialogue" => "听后回答 (简答)".to_string(),
-                                "collector.repeat" | "collector.repeat_essay" | "collector.repeat_dialogue" => "短文复述".to_string(),
-                                "collector.3q5a" => "三问五答".to_string(),
-                                "collector.word" => "单词辨音".to_string(),
-                                "collector.essay" => "情景表达".to_string(),
-                                other => other.to_string(),
-                            };
-
-                            sections.push(ParsedSection {
-                                section_type: structure_type,
-                                title: friendly_title,
-                                questions,
-                            });
-                        }
-                    }
-                }
+            if let Some(sec) = Self::parse_section_from_part_dir(&part_dir, &mut question_counter) {
+                sections.push(sec);
+            }
+        }
 
         if sections.is_empty() {
             // 兜底：若 ZIP 下载未能解析出有效题目，尝试 4 级回退链
@@ -666,6 +521,168 @@ impl CloudClient {
             set_type: homework.set_type,
             pk: homework.pk,
             resource_id: homework.resource_id.clone(),
+        })
+    }
+
+    /// 从解压分卷目录解析试卷题目与标准答案 (Tier 3: TIGER64 White VM)
+    #[inline(never)]
+    fn parse_section_from_part_dir(
+        part_dir: &Path,
+        question_counter: &mut usize,
+    ) -> Option<ParsedSection> {
+        crate::themida_tiger_white!({
+            let content_file = part_dir.join("content.json");
+            if !content_file.exists() {
+                return None;
+            }
+            let c_str = fs::read_to_string(&content_file).ok()?;
+            let content_val = serde_json::from_str::<Value>(&c_str).ok()?;
+
+            let content2_val = part_dir.join("content2.json").exists().then(|| {
+                fs::read_to_string(part_dir.join("content2.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+            }).flatten();
+
+            let info_val = part_dir.join("info.json").exists().then(|| {
+                fs::read_to_string(part_dir.join("info.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+            }).flatten();
+
+            let structure_type = content_val.get("structure_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("未知题型")
+                .to_string();
+
+            let raw_questions = resolver::api::parse_task(
+                &content_val,
+                content2_val.as_ref(),
+                info_val.as_ref(),
+            );
+
+            let mut questions = Vec::new();
+            for raw_q in raw_questions {
+                *question_counter += 1;
+                let no = raw_q.get("no").map(|v| match v {
+                    Value::Number(n) => n.to_string(),
+                    Value::String(s) => s.clone(),
+                    _ => question_counter.to_string(),
+                }).unwrap_or_else(|| question_counter.to_string());
+
+                let cat = raw_q.get("category").and_then(|v| v.as_str()).unwrap_or(&structure_type).to_string();
+                let prompt = raw_q
+                    .get("question")
+                    .or_else(|| raw_q.get("text"))
+                    .or_else(|| raw_q.get("prompt"))
+                    .or_else(|| raw_q.get("ask"))
+                    .or_else(|| raw_q.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let mut answers = Vec::new();
+                if let Some(ans_val) = raw_q.get("answers").or_else(|| raw_q.get("answer")) {
+                    match ans_val {
+                        Value::Array(arr) => {
+                            for a in arr {
+                                if let Some(s) = a.as_str() {
+                                    let s_trim = s.trim();
+                                    if !s_trim.is_empty() {
+                                        answers.push(s_trim.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        Value::String(s) => {
+                            let s_trim = s.trim();
+                            if !s_trim.is_empty() {
+                                answers.push(s_trim.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let mut important_points = Vec::new();
+                if let Some(Value::Array(arr)) = raw_q.get("important") {
+                    for item in arr {
+                        if let Some(s) = item.as_str()
+                            && !s.is_empty() {
+                            important_points.push(s.to_string());
+                        }
+                    }
+                }
+
+                let mut options = Vec::new();
+                if let Some(opts) = raw_q.get("options").and_then(|v| v.as_array()) {
+                    for opt in opts {
+                        match opt {
+                            Value::String(s) => {
+                                let trimmed = s.trim();
+                                let (label, text) = if let Some((l, r)) = trimmed.split_once('.') {
+                                    if l.chars().count() == 1 {
+                                        (l.trim().to_string(), r.trim().to_string())
+                                    } else {
+                                        ("".to_string(), trimmed.to_string())
+                                    }
+                                } else {
+                                    ("".to_string(), trimmed.to_string())
+                                };
+                                options.push(QuestionOption { label, text, image_path: None });
+                            }
+                            Value::Object(obj) => {
+                                let label = obj.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let text = obj.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let img = obj.get("image").or_else(|| obj.get("image_path")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                                options.push(QuestionOption { label, text, image_path: img });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let audio_file = raw_q.get("audio").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let word_id = raw_q.get("word_id").and_then(|v| v.as_i64());
+                let question_id = raw_q.get("question_id").and_then(|v| v.as_i64());
+
+                questions.push(ParsedQuestion {
+                    index: *question_counter - 1,
+                    number: no,
+                    category: cat,
+                    prompt_text: prompt,
+                    answers,
+                    important_points,
+                    audio_file,
+                    options,
+                    word_id,
+                    question_id,
+                });
+            }
+
+            if questions.is_empty() {
+                return None;
+            }
+
+            let friendly_title = match structure_type.as_str() {
+                "collector.choose" => "听后选择".to_string(),
+                "collector.read" => "短文朗读".to_string(),
+                "collector.picture" => "看图说话".to_string(),
+                "collector.fill" => "听后填空".to_string(),
+                "collector.role" | "collector.role_play" => "角色扮演".to_string(),
+                "collector.dialogue" => "听后回答 (简答)".to_string(),
+                "collector.repeat" | "collector.repeat_essay" | "collector.repeat_dialogue" => "短文复述".to_string(),
+                "collector.3q5a" => "三问五答".to_string(),
+                "collector.word" => "单词辨音".to_string(),
+                "collector.essay" => "情景表达".to_string(),
+                other => other.to_string(),
+            };
+
+            Some(ParsedSection {
+                section_type: structure_type,
+                title: friendly_title,
+                questions,
+            })
         })
     }
 
@@ -997,7 +1014,8 @@ impl CloudClient {
         Ok(res.get("body").cloned().unwrap_or(res))
     }
 
-    /// 阶段 8: 提交最终作业得分终审报告 (report-score)
+    /// 阶段 8: 提交最终作业得分终审报告 (report-score) (Tier 4: FALCON64 Tiny VM)
+    #[inline(never)]
     pub fn report_score(
         token: &str,
         homework_id: &str,
@@ -1006,22 +1024,24 @@ impl CloudClient {
         score_rate: i64,
         total_seconds: u32,
     ) -> Result<Value, String> {
-        let hw_id_num = homework_id.parse::<i64>().unwrap_or(0);
-        let params = json!({
-            "sn": "test",
-            "token": token,
-            "homework_id": hw_id_num,
-            "resource_id": resource_id,
-            "homework_score_rate": score_rate,
-            "homework_complete_rate": 1_000_000,
-            "homework_use_time": total_seconds,
-            "is_confirm_commit": 1,
-            "parent_account_id": parent_id,
-            "seq_id": "",
-            "version": "3",
-            "system": "4",
-            "global_client_version": "5.4.5",
-            "sign_response": 1
+        let params = crate::themida_falcon_tiny!({
+            let hw_id_num = homework_id.parse::<i64>().unwrap_or(0);
+            json!({
+                "sn": "test",
+                "token": token,
+                "homework_id": hw_id_num,
+                "resource_id": resource_id,
+                "homework_score_rate": score_rate,
+                "homework_complete_rate": 1_000_000,
+                "homework_use_time": total_seconds,
+                "is_confirm_commit": 1,
+                "parent_account_id": parent_id,
+                "seq_id": "",
+                "version": "3",
+                "system": "4",
+                "global_client_version": "5.4.5",
+                "sign_response": 1
+            })
         });
         let res = Self::call_ets_api("/g/homework/report-score", "g/homework/report-score", params)?;
         Ok(res.get("body").cloned().unwrap_or(res))
