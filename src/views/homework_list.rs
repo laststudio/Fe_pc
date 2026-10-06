@@ -246,12 +246,12 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                 ui.label("当前分类暂无作业。系统检测到本地已安装 e听说 客户端并存在离线作业缓存。");
                 ui.add_space(6.0);
                 responsive_flow(ui, |ui| {
-                    if accent_action_btn(ui, "📂 载入本地离线作业 (5 项)", None).clicked() {
+                    if accent_action_btn(ui, "📂 载入本地离线作业缓存", None).clicked() {
                         if let Ok(cached) = crate::ets_local_db::read_cached_homeworks(&db_path) {
                             let count = cached.len();
                             state.homework_items = cached;
                             state.notification = Some((
-                                format!("📂 已自动加载本地离线作业列表 ({} 项)", count),
+                                format!("📂 已成功加载本地离线作业列表 ({} 项)", count),
                                 InfoBarKind::Success,
                             ));
                         }

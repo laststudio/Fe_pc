@@ -171,6 +171,7 @@ impl FepcApp {
             state.theme_config.theme = fluent_egui::winui::FluentTheme::Light;
         }
 
+        #[cfg(debug_assertions)]
         if std::env::var("FEPC_TEST_AUTO_RUNNING").is_ok() {
             state.la_session = Some(crate::la_client::LaSession {
                 session_id: "test_sess".to_string(),

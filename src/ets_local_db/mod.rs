@@ -183,27 +183,52 @@ pub fn decrypt_ets_password(cipher: &str) -> Option<String> {
 
 /// 多路径层叠自动探测本地 ETS.db 路径
 pub fn detect_db_path() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-
-    // 1. 当前工程环境或相对路径
-    candidates.push(PathBuf::from(r"F:\fepc\ETS\localdata\ETS.db"));
-    candidates.push(PathBuf::from(r"ETS\localdata\ETS.db"));
-    candidates.push(PathBuf::from(r"..\ETS\localdata\ETS.db"));
-
-    // 2. 常见盘符安装路径
-    for drive in &["C", "D", "E", "F", "G"] {
-        candidates.push(PathBuf::from(format!(r"{drive}:\ETS\localdata\ETS.db")));
-        candidates.push(PathBuf::from(format!(r"{drive}:\Program Files (x86)\ETS\localdata\ETS.db")));
-        candidates.push(PathBuf::from(format!(r"{drive}:\Program Files\ETS\localdata\ETS.db")));
+    // 0. 支持环境变量显式指定 (用于自定义测试或排查)
+    if let Ok(p) = std::env::var("FEPC_ETS_DB_PATH") {
+        if !p.trim().is_empty() {
+            let pb = PathBuf::from(p.trim());
+            if pb.exists() && pb.is_file() {
+                return Some(pb);
+            }
+        }
     }
 
-    // 3. 用户 AppData 目录
+    let mut candidates = Vec::new();
+
+    // 1. 优先检测当前运行程序同级或上级目录的 ETS 安装目录
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("localdata").join("ETS.db"));
+            candidates.push(exe_dir.join("ETS").join("localdata").join("ETS.db"));
+            if let Some(parent) = exe_dir.parent() {
+                candidates.push(parent.join("ETS").join("localdata").join("ETS.db"));
+                candidates.push(parent.join("localdata").join("ETS.db"));
+            }
+        }
+    }
+
+    // 2. 当前工作目录及相对路径
+    candidates.push(PathBuf::from(r"ETS\localdata\ETS.db"));
+    candidates.push(PathBuf::from(r"..\ETS\localdata\ETS.db"));
+    candidates.push(PathBuf::from(r"localdata\ETS.db"));
+
+    // 3. 用户 AppData 与 LocalAppData 目录 (官方 e听说 实际持久化数据目录)
     if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
         candidates.push(PathBuf::from(app_data).join("ETS").join("localdata").join("ETS.db"));
     }
     if let Ok(app_data) = std::env::var("APPDATA") {
         candidates.push(PathBuf::from(app_data).join("ETS").join("localdata").join("ETS.db"));
     }
+
+    // 4. 常见盘符安装路径 (C/D/E/F/G)
+    for drive in &["C", "D", "E", "F", "G"] {
+        candidates.push(PathBuf::from(format!(r"{drive}:\ETS\localdata\ETS.db")));
+        candidates.push(PathBuf::from(format!(r"{drive}:\Program Files (x86)\ETS\localdata\ETS.db")));
+        candidates.push(PathBuf::from(format!(r"{drive}:\Program Files\ETS\localdata\ETS.db")));
+    }
+
+    #[cfg(debug_assertions)]
+    candidates.push(PathBuf::from(r"F:\fepc\ETS\localdata\ETS.db"));
 
     for p in candidates {
         if p.exists() && p.is_file() {
@@ -614,13 +639,17 @@ pub fn find_paper_id_by_name(db_path: &Path, name: &str) -> Option<i64> {
         let mc_clean = mc.trim().to_lowercase();
         let jc_clean = jc.trim().to_lowercase();
 
+        // 1. 完全精确匹配
         if (!mc_clean.is_empty() && mc_clean == target) || (!jc_clean.is_empty() && jc_clean == target) {
             return Some(pid);
         }
-        if (!mc_clean.is_empty() && (mc_clean.contains(&target) || target.contains(&mc_clean)))
-            || (!jc_clean.is_empty() && (jc_clean.contains(&target) || target.contains(&jc_clean)))
-        {
-            candidate = Some(pid);
+        // 2. 高专属性包含匹配 (长度 >= 8，杜绝“期中/听说/测试”等通用短词误触)
+        if target.len() >= 8 {
+            if !mc_clean.is_empty() && mc_clean.len() >= 8 && (mc_clean.contains(&target) || target.contains(&mc_clean)) {
+                candidate = Some(pid);
+            } else if !jc_clean.is_empty() && jc_clean.len() >= 8 && (jc_clean.contains(&target) || target.contains(&jc_clean)) {
+                candidate = Some(pid);
+            }
         }
     }
 

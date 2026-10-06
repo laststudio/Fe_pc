@@ -70,7 +70,11 @@ impl CloudClient {
         if let Some(code) = res.get("result").and_then(|r| r.get("device_code")).and_then(|v| v.as_str()) {
             return code.to_string();
         }
-        "BF1CB2218D9A88B9|0C072A134F008B9F".to_string()
+        // 动态回退：基于本机唯一硬件指纹生成独立设备码，杜绝跨设备撞码与顶号换绑
+        let pid = crate::utils::device_info::get_platform_device_id();
+        let h1 = format!("{:x}", md5::Md5::digest(format!("{pid}_fepc_d1").as_bytes()));
+        let h2 = format!("{:x}", md5::Md5::digest(format!("{pid}_fepc_d2").as_bytes()));
+        format!("{}|{}", h1[..16].to_uppercase(), h2[..16].to_uppercase())
     }
 
     /// 执行官方 ETS100 云端登录
