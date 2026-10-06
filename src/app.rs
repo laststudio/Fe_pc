@@ -226,6 +226,12 @@ impl eframe::App for FepcApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.frame_count = self.frame_count.saturating_add(1);
 
+        // 轮询并消费跨线程安全异步 Worker 事件
+        self.state.poll_async_events();
+        if self.state.la_login_in_progress || self.state.homework_refreshing || self.state.local_scanning {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        }
+
         // 首帧安全追加加载 Windows 系统 Emoji 与 Symbol 字体库（杜绝未初始化构造期调用 ctx.fonts 导致的 panic）
         if self.frame_count == 1 {
             #[cfg(windows)]
@@ -311,51 +317,7 @@ impl eframe::App for FepcApp {
 
                 let u = self.state.la_username_input.clone();
                 let p = self.state.la_password_input.clone();
-                match crate::la_client::LaClient::login(&u, &p, Some(&token)) {
-                    Ok(session) => {
-                        crate::la_client::sync_auth_to_resolver(&session.access_token);
-                        if let Ok(dev_code) = crate::la_client::LaClient::get_cloud_device_code(&session.access_token)
-                            && !dev_code.trim().is_empty() {
-                            self.state.session.device_code = dev_code;
-                        }
-                        let ets_result = crate::la_client::LaClient::get_cloud_session(&session.access_token, "");
-                        match ets_result {
-                            Ok(cloud_sess) => {
-                                if !cloud_sess.device_code.trim().is_empty() {
-                                    self.state.session.device_code = cloud_sess.device_code.clone();
-                                }
-                                self.state.session.phone = cloud_sess.account_display.clone();
-                                self.state.session.token = cloud_sess.token.clone();
-                                self.state.session.parent_account_id = cloud_sess.parent_account_id.clone();
-                                self.state.session.is_logged_in = true;
-                                if let Some(name) = cloud_sess.selected_account.get("name").and_then(|v| v.as_str()) {
-                                    self.state.session.user_name = name.to_string();
-                                } else {
-                                    self.state.session.user_name = cloud_sess.account_display.clone();
-                                }
-                                self.state.la_cloud_session = Some(cloud_sess);
-                                self.state.notification = Some((
-                                    format!("LA 会员登录成功！已自动托管激活 ETS100 学生会话 ({})", self.state.session.user_name),
-                                    InfoBarKind::Success,
-                                ));
-                                if let Ok(hws) = CloudClient::get_homework_list(&self.state.session, "1") {
-                                    self.state.homework_items = hws;
-                                }
-                            }
-                            Err(_) => {
-                                self.state.notification = Some((
-                                    format!("LA 会员 [{}] 登录成功！", session.user.username),
-                                    InfoBarKind::Success,
-                                ));
-                            }
-                        }
-                        self.state.la_devices = crate::la_client::LaClient::list_devices(&session.access_token).unwrap_or_default();
-                        self.state.la_session = Some(session);
-                    }
-                    Err(e) => {
-                        self.state.notification = Some((format!("登录失败: {e}"), InfoBarKind::Error));
-                    }
-                }
+                crate::views::cloud_account::start_async_la_login(&mut self.state, u, p, Some(token));
             }
         }
 
@@ -368,32 +330,6 @@ impl eframe::App for FepcApp {
                 self.state.theme_config.theme,
                 self.state.backdrop_kind,
             );
-        }
-
-        // 自动消失通知倒计时管理 (6 秒后平滑淡出，鼠标悬浮时仅顺延超时，绝不篡改进场动画时间戳)
-        let current_time = ui.ctx().input(|i| i.time);
-        if let Some((ref msg, _)) = self.state.notification {
-            if self.state.last_notification_text.as_deref() != Some(msg.as_str()) {
-                self.state.last_notification_text = Some(msg.clone());
-                self.state.notification_created_at = Some(current_time);
-                self.state.notification_expires_at = Some(current_time + 6.0);
-                self.state.notification_dismissing = false;
-                self.state.notification_dismiss_start = None;
-            }
-
-            if !self.state.notification_dismissing
-                && let Some(expires_at) = self.state.notification_expires_at
-                && current_time >= expires_at
-            {
-                self.state.notification_dismissing = true;
-                self.state.notification_dismiss_start = Some(current_time);
-            }
-        } else {
-            self.state.last_notification_text = None;
-            self.state.notification_created_at = None;
-            self.state.notification_expires_at = None;
-            self.state.notification_dismissing = false;
-            self.state.notification_dismiss_start = None;
         }
 
         if self.logo_texture.is_none() {
@@ -699,160 +635,7 @@ impl eframe::App for FepcApp {
                                     }
                                 }
 
-                                // 顶部通知条提示 (紧凑 Fluent 2 InfoBar 结构，平滑进出过渡动效，杜绝生硬抽动)
-                                if let Some((msg, kind)) = self.state.notification.clone() {
-                                    let is_dark = self.state.theme_config.theme.is_dark();
 
-                                    // 动效插值因子计算 (0.0 ~ 1.0)
-                                    let anim_factor = if self.state.notification_dismissing {
-                                        let start = self.state.notification_dismiss_start.unwrap_or(current_time);
-                                        let elapsed = (current_time - start) as f32;
-                                        let duration = 0.22;
-                                        if elapsed >= duration {
-                                            self.state.notification = None;
-                                            self.state.last_notification_text = None;
-                                            self.state.notification_created_at = None;
-                                            self.state.notification_expires_at = None;
-                                            self.state.notification_dismissing = false;
-                                            self.state.notification_dismiss_start = None;
-                                            0.0
-                                        } else {
-                                            ui.ctx().request_repaint();
-                                            let t = (elapsed / duration).clamp(0.0, 1.0);
-                                            let inv = 1.0 - t;
-                                            inv * inv
-                                        }
-                                    } else {
-                                        let created = self.state.notification_created_at.unwrap_or(current_time);
-                                        let elapsed = (current_time - created) as f32;
-                                        let duration = 0.18;
-                                        if elapsed < duration {
-                                            ui.ctx().request_repaint();
-                                            (elapsed / duration).clamp(0.0, 1.0)
-                                        } else {
-                                            1.0
-                                        }
-                                    };
-
-                                    if anim_factor > 0.001 {
-                                        let (icon_str, title_str, base_icon, base_border, base_bg) = match kind {
-                                            InfoBarKind::Success => (
-                                                "✔",
-                                                "操作成功",
-                                                if is_dark { Color32::from_rgb(108, 203, 95) } else { Color32::from_rgb(15, 123, 15) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(46, 180, 80, 110) } else { Color32::from_rgba_unmultiplied(15, 123, 15, 90) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(28, 44, 32, 235) } else { Color32::from_rgb(223, 246, 221) },
-                                            ),
-                                            InfoBarKind::Warning => (
-                                                "⚠",
-                                                "系统提醒",
-                                                if is_dark { Color32::from_rgb(252, 225, 0) } else { Color32::from_rgb(157, 93, 0) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(230, 180, 30, 110) } else { Color32::from_rgba_unmultiplied(157, 93, 0, 90) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(46, 42, 26, 235) } else { Color32::from_rgb(255, 244, 206) },
-                                            ),
-                                            InfoBarKind::Error => (
-                                                "❌",
-                                                "错误提示",
-                                                if is_dark { Color32::from_rgb(255, 120, 120) } else { Color32::from_rgb(196, 43, 28) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(240, 70, 70, 130) } else { Color32::from_rgba_unmultiplied(196, 43, 28, 100) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(48, 28, 28, 235) } else { Color32::from_rgb(253, 231, 233) },
-                                            ),
-                                            InfoBarKind::Informational => (
-                                                "ℹ",
-                                                "系统通知",
-                                                if is_dark { Color32::from_rgb(96, 205, 255) } else { Color32::from_rgb(0, 95, 184) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(0, 150, 255, 110) } else { Color32::from_rgba_unmultiplied(0, 95, 184, 90) },
-                                                if is_dark { Color32::from_rgba_unmultiplied(30, 42, 54, 235) } else { Color32::from_rgb(240, 246, 254) },
-                                            ),
-                                        };
-
-                                        let icon_color = Color32::from_rgba_unmultiplied(
-                                            base_icon.r(), base_icon.g(), base_icon.b(),
-                                            ((base_icon.a() as f32) * anim_factor) as u8,
-                                        );
-                                        let border_color = Color32::from_rgba_unmultiplied(
-                                            base_border.r(), base_border.g(), base_border.b(),
-                                            ((base_border.a() as f32) * anim_factor) as u8,
-                                        );
-                                        let bg_color = Color32::from_rgba_unmultiplied(
-                                            base_bg.r(), base_bg.g(), base_bg.b(),
-                                            ((base_bg.a() as f32) * anim_factor) as u8,
-                                        );
-
-                                        let mut close_clicked = false;
-                                        let pad_y = (8.0 * anim_factor).round() as i8;
-                                        let frame_resp = egui::Frame::new()
-                                            .corner_radius(6.0)
-                                            .stroke(egui::Stroke::new(1.0, border_color))
-                                            .fill(bg_color)
-                                            .inner_margin(egui::Margin {
-                                                left: 14,
-                                                right: 12,
-                                                top: pad_y.max(2),
-                                                bottom: pad_y.max(2),
-                                            })
-                                            .show(ui, |ui| {
-                                                // Fluent 2 紧凑单列/流式结构：左图标，中垂直图文（紧凑对齐），右关闭按钮
-                                                ui.horizontal(|ui| {
-                                                    ui.spacing_mut().item_spacing.x = 10.0;
-                                                    ui.label(RichText::new(icon_str).size(15.0).color(icon_color).strong());
-
-                                                    ui.vertical(|ui| {
-                                                        ui.spacing_mut().item_spacing.y = 2.0;
-                                                        ui.horizontal_wrapped(|ui| {
-                                                            ui.spacing_mut().item_spacing.x = 8.0;
-                                                            ui.label(RichText::new(title_str).strong().size(13.0).color(icon_color));
-                                                            ui.add(
-                                                                egui::Label::new(
-                                                                    RichText::new(&msg)
-                                                                        .size(12.5)
-                                                                        .color(if is_dark {
-                                                                            Color32::from_rgba_unmultiplied(225, 225, 225, (225.0 * anim_factor) as u8)
-                                                                        } else {
-                                                                            Color32::from_rgba_unmultiplied(35, 35, 35, (225.0 * anim_factor) as u8)
-                                                                        }),
-                                                                )
-                                                                .wrap(),
-                                                            );
-                                                        });
-                                                    });
-
-                                                    ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
-                                                        let close_color = if is_dark {
-                                                            Color32::from_rgba_unmultiplied(180, 180, 180, (180.0 * anim_factor) as u8)
-                                                        } else {
-                                                            Color32::from_rgba_unmultiplied(90, 90, 90, (180.0 * anim_factor) as u8)
-                                                        };
-                                                        let close_btn = ui.add(
-                                                            egui::Button::new(
-                                                                RichText::new("\u{00D7}")
-                                                                    .size(16.0)
-                                                                    .color(close_color),
-                                                            )
-                                                            .frame(false),
-                                                        );
-                                                        if close_btn.hovered() {
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                                        }
-                                                        if close_btn.clicked() {
-                                                            close_clicked = true;
-                                                        }
-                                                    });
-                                                });
-                                            });
-
-                                        if frame_resp.response.hovered() && !self.state.notification_dismissing {
-                                            // 鼠标悬停顺延 6 秒超时倒计时，绝对不修改进场动画基准时间 notification_created_at
-                                            self.state.notification_expires_at = Some(current_time + 6.0);
-                                        }
-
-                                        if close_clicked && !self.state.notification_dismissing {
-                                            self.state.notification_dismissing = true;
-                                            self.state.notification_dismiss_start = Some(current_time);
-                                        }
-                                        ui.add_space((10.0 * anim_factor).round());
-                                    }
-                                }
 
                                 // 页面切换平滑过渡动效 (Fluent PageTransition: 20px 向上缓入 + 0.24s 立方缓出淡入)
                                 let cur_tab = self.state.current_tab;
@@ -931,6 +714,9 @@ impl eframe::App for FepcApp {
                     });
             });
 
+        // 渲染 Win11 原生风格右上角悬浮 Toast 通知 (绝对定位，避免推挤页面主内容导致颠簸)
+        Self::render_floating_toast(ui.ctx(), &mut self.state);
+
         // 渲染全局 WinUI 风格权限拦截与会员特权引导模态对话框
         crate::views::render_auth_gate_modal(ui.ctx(), &mut self.state);
 
@@ -940,4 +726,251 @@ impl eframe::App for FepcApp {
         // 渲染全局 WinUI 风格系统公告与版本更新模态对话框
         crate::views::render_announcement_modal(ui.ctx(), &mut self.state);
     }
+}
+
+impl FepcApp {
+    /// Win11 原生风格右上角悬浮 Toast 通知渲染引擎 (绝对定位，避免推挤页面主内容导致颠簸)
+    pub fn render_floating_toast(ctx: &egui::Context, state: &mut AppState) {
+        if state.notification.is_none() && !state.notification_dismissing {
+            return;
+        }
+
+        let current_time = ctx.input(|i| i.time);
+
+        // 检测新通知产生，初始化显示时间戳与倒计时 (默认 6 秒)
+        if let Some((ref msg, _)) = state.notification {
+            if state.last_notification_text.as_deref() != Some(msg.as_str()) {
+                state.last_notification_text = Some(msg.clone());
+                state.notification_created_at = Some(current_time);
+                state.notification_expires_at = Some(current_time + 6.0);
+                state.notification_dismissing = false;
+                state.notification_dismiss_start = None;
+            }
+
+            // 超时自动开启淡出
+            if !state.notification_dismissing
+                && let Some(expires_at) = state.notification_expires_at
+                && current_time >= expires_at
+            {
+                state.notification_dismissing = true;
+                state.notification_dismiss_start = Some(current_time);
+            }
+        }
+
+        let is_dismissing = state.notification_dismissing;
+        let dismiss_start = state.notification_dismiss_start.unwrap_or(current_time);
+        let created_at = state.notification_created_at.unwrap_or(current_time);
+        let now = current_time;
+
+        // 动效插值因子与生命周期状态安全运算
+        let (anim_factor, should_clear, is_animating) = {
+            let factor: f32;
+            let clear: bool;
+            let animating: bool;
+            if is_dismissing {
+                let elapsed = (now - dismiss_start) as f32;
+                let duration = 0.22f32;
+                if elapsed >= duration {
+                    factor = 0.0;
+                    clear = true;
+                    animating = false;
+                } else {
+                    let t = (elapsed / duration).clamp(0.0, 1.0);
+                    let inv = 1.0 - t;
+                    factor = inv * inv;
+                    clear = false;
+                    animating = true;
+                }
+            } else {
+                let elapsed = (now - created_at) as f32;
+                let duration = 0.22f32;
+                if elapsed < duration {
+                    let t = (elapsed / duration).clamp(0.0, 1.0);
+                    let inv = 1.0 - t;
+                    factor = 1.0 - inv * inv * inv;
+                    clear = false;
+                    animating = true;
+                } else {
+                    factor = 1.0;
+                    clear = false;
+                    animating = false;
+                }
+            }
+            (factor, clear, animating)
+        };
+
+        if is_animating {
+            ctx.request_repaint();
+        }
+
+        if should_clear {
+            state.notification = None;
+            state.last_notification_text = None;
+            state.notification_created_at = None;
+            state.notification_expires_at = None;
+            state.notification_dismissing = false;
+            state.notification_dismiss_start = None;
+            return;
+        }
+
+        if anim_factor <= 0.001 {
+            return;
+        }
+
+        let Some((ref msg, kind)) = state.notification else {
+            return;
+        };
+
+        let is_dark = state.theme_config.theme.is_dark();
+
+        let (icon_str, title_str, base_icon, base_border, base_bg) = match kind {
+            InfoBarKind::Success => (
+                "✔",
+                "操作成功",
+                if is_dark { Color32::from_rgb(108, 203, 95) } else { Color32::from_rgb(15, 123, 15) },
+                if is_dark { Color32::from_rgba_unmultiplied(46, 180, 80, 120) } else { Color32::from_rgba_unmultiplied(15, 123, 15, 100) },
+                if is_dark { Color32::from_rgba_unmultiplied(26, 40, 30, 230) } else { Color32::from_rgba_unmultiplied(235, 248, 235, 240) },
+            ),
+            InfoBarKind::Warning => (
+                "⚠",
+                "系统提醒",
+                if is_dark { Color32::from_rgb(252, 225, 0) } else { Color32::from_rgb(157, 93, 0) },
+                if is_dark { Color32::from_rgba_unmultiplied(230, 180, 30, 120) } else { Color32::from_rgba_unmultiplied(157, 93, 0, 100) },
+                if is_dark { Color32::from_rgba_unmultiplied(42, 38, 24, 230) } else { Color32::from_rgba_unmultiplied(255, 248, 230, 240) },
+            ),
+            InfoBarKind::Error => (
+                "❌",
+                "错误提示",
+                if is_dark { Color32::from_rgb(255, 120, 120) } else { Color32::from_rgb(196, 43, 28) },
+                if is_dark { Color32::from_rgba_unmultiplied(240, 70, 70, 140) } else { Color32::from_rgba_unmultiplied(196, 43, 28, 110) },
+                if is_dark { Color32::from_rgba_unmultiplied(44, 26, 26, 230) } else { Color32::from_rgba_unmultiplied(255, 238, 240, 240) },
+            ),
+            InfoBarKind::Informational => (
+                "ℹ",
+                "系统通知",
+                if is_dark { Color32::from_rgb(96, 205, 255) } else { Color32::from_rgb(0, 95, 184) },
+                if is_dark { Color32::from_rgba_unmultiplied(0, 150, 255, 120) } else { Color32::from_rgba_unmultiplied(0, 95, 184, 100) },
+                if is_dark { Color32::from_rgba_unmultiplied(24, 34, 46, 230) } else { Color32::from_rgba_unmultiplied(240, 247, 255, 240) },
+            ),
+        };
+
+        let apply_alpha = |c: Color32| -> Color32 {
+            Color32::from_rgba_unmultiplied(
+                c.r(),
+                c.g(),
+                c.b(),
+                ((c.a() as f32) * anim_factor).round() as u8,
+            )
+        };
+
+        let icon_color = apply_alpha(base_icon);
+        let border_color = apply_alpha(base_border);
+        let bg_color = apply_alpha(base_bg);
+        let shadow_alpha = (50.0 * anim_factor).round() as u8;
+        let shadow_color = Color32::from_rgba_unmultiplied(0, 0, 0, shadow_alpha);
+
+        let text_color = if is_dark {
+            Color32::from_rgba_unmultiplied(230, 230, 230, (230.0 * anim_factor).round() as u8)
+        } else {
+            Color32::from_rgba_unmultiplied(35, 35, 35, (230.0 * anim_factor).round() as u8)
+        };
+
+        let close_color = if is_dark {
+            Color32::from_rgba_unmultiplied(180, 180, 180, (180.0 * anim_factor).round() as u8)
+        } else {
+            Color32::from_rgba_unmultiplied(110, 110, 110, (180.0 * anim_factor).round() as u8)
+        };
+
+        let frame = egui::Frame::new()
+            .corner_radius(8.0)
+            .stroke(egui::Stroke::new(1.0, border_color))
+            .fill(bg_color)
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 4],
+                blur: 16,
+                spread: 0,
+                color: shadow_color,
+            })
+            .inner_margin(egui::Margin::symmetric(14, 10));
+
+        let offset_x = (1.0 - anim_factor) * 36.0;
+        let anchor_pos = egui::vec2(-24.0 + offset_x, 42.0);
+
+        let mut close_clicked = false;
+        let mut is_hovered = false;
+
+        egui::Area::new(egui::Id::new("fepc_floating_toast_notification"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_TOP, anchor_pos)
+            .interactable(true)
+            .show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                ui.set_min_width(280.0);
+
+                let frame_resp = frame.show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.label(RichText::new(icon_str).size(16.0).color(icon_color).strong());
+
+                        let content_w = (ui.available_width() - 24.0).max(120.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(content_w, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.label(RichText::new(title_str).strong().size(12.5).color(icon_color));
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(msg)
+                                            .size(12.0)
+                                            .color(text_color),
+                                    )
+                                    .wrap(),
+                                );
+                            },
+                        );
+
+                        let close_btn = ui.add(
+                            egui::Button::new(
+                                RichText::new("\u{00D7}")
+                                    .size(16.0)
+                                    .color(close_color),
+                            )
+                            .frame(false),
+                        );
+                        if close_btn.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if close_btn.clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                });
+
+                if frame_resp.response.hovered()
+                    || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pos| frame_resp.response.rect.contains(pos))
+                {
+                    is_hovered = true;
+                }
+            });
+
+        // 鼠标悬停顺延 4 秒超时倒计时
+        if is_hovered && !state.notification_dismissing {
+            let target_expire = current_time + 4.0;
+            if state.notification_expires_at.unwrap_or(0.0) < target_expire {
+                state.notification_expires_at = Some(target_expire);
+            }
+        }
+
+        // 点击关闭按钮平滑淡出退场
+        if close_clicked && !state.notification_dismissing {
+            state.notification_dismissing = true;
+            state.notification_dismiss_start = Some(current_time);
+            ctx.request_repaint();
+        }
+    }
+}
+
+pub fn render_floating_toast(ctx: &egui::Context, state: &mut AppState) {
+    FepcApp::render_floating_toast(ctx, state);
 }

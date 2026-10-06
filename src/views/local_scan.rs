@@ -7,7 +7,6 @@
 
 use eframe::egui::{Color32, RichText};
 use fluent_egui::winui::prelude::*;
-use fluent_egui::winui::InfoBarKind;
 
 use crate::local::LocalScanner;
 use crate::state::{AnswerViewMode, AppState, NavTab};
@@ -47,11 +46,18 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
                 responsive_flow(ui, |ui| {
                     let btn_resp = choice_btn(ui, &label, is_selected, None);
-                    if btn_resp.on_hover_text(&dir_str).clicked() {
+                    if btn_resp.on_hover_text(&dir_str).clicked() && !state.local_scanning {
                         state.selected_local_dir = Some(dir.clone());
                         state.refresh_selected_local_metadata();
-                        state.local_items = LocalScanner::scan_homeworks_lazy(dir);
-                        state.notification = Some((format!("已切换至本地目录: {}", dir_str), InfoBarKind::Success));
+                        state.local_scanning = true;
+                        let tx = state.async_worker_tx.clone();
+                        let d = dir.clone();
+                        std::thread::spawn(move || {
+                            let items = LocalScanner::scan_homeworks_lazy(&d);
+                            let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                                crate::state::AsyncWorkerEvent::LocalScanResult(items),
+                            ));
+                        });
                     }
                 });
 
@@ -80,22 +86,44 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         ui.separator();
 
         responsive_flow(ui, |ui| {
-            if action_btn(ui, "🔄 重新扫描默认路径").clicked() {
+            let scan_btn_text = if state.local_scanning {
+                "[ ⏳ 扫描中... ]"
+            } else {
+                "🔄 重新扫描本地试卷目录"
+            };
+            if action_btn(ui, scan_btn_text).clicked() && !state.local_scanning {
+                state.local_scanning = true;
                 state.local_ets_dirs = LocalScanner::find_ets_local_dirs();
                 if let Some(first) = state.local_ets_dirs.first().cloned() {
-                    state.selected_local_dir = Some(first.clone());
+                    state.selected_local_dir = Some(first);
                     state.refresh_selected_local_metadata();
-                    state.local_items = LocalScanner::scan_homeworks_lazy(&first);
-                    state.notification = Some((format!("扫描完成，发现 {} 份本地试卷 (已建立极速索引)", state.local_items.len()), InfoBarKind::Success));
                 }
+                let tx = state.async_worker_tx.clone();
+                let dir_opt = state.selected_local_dir.clone();
+                std::thread::spawn(move || {
+                    let items = if let Some(ref d) = dir_opt {
+                        LocalScanner::scan_homeworks_lazy(d)
+                    } else {
+                        Vec::new()
+                    };
+                    let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                        crate::state::AsyncWorkerEvent::LocalScanResult(items),
+                    ));
+                });
             }
 
-            if accent_action_btn(ui, "📂 选择其他自定义目录", None).clicked()
+            if accent_action_btn(ui, "📂 选择其他自定义目录", None).clicked() && !state.local_scanning
                 && let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     state.selected_local_dir = Some(folder.clone());
                     state.refresh_selected_local_metadata();
-                    state.local_items = LocalScanner::scan_homeworks_lazy(&folder);
-                    state.notification = Some((format!("已扫描自定义目录，发现 {} 份作业 (已建立极速索引)", state.local_items.len()), InfoBarKind::Success));
+                    state.local_scanning = true;
+                    let tx = state.async_worker_tx.clone();
+                    std::thread::spawn(move || {
+                        let items = LocalScanner::scan_homeworks_lazy(&folder);
+                        let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                            crate::state::AsyncWorkerEvent::LocalScanResult(items),
+                        ));
+                    });
                 }
         });
     });
@@ -107,6 +135,12 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     ui.add_space(6.0);
 
     if state.local_items.is_empty() {
+        if state.local_scanning {
+            ui.card("正在扫描", "正在后台扫描本地试卷目录...", |ui| {
+                ui.label(RichText::new("⏳ 正在快速扫描本地试卷目录并建立索引，请稍候...").color(Color32::from_rgb(0, 180, 255)));
+            });
+            return;
+        }
         ui.card("未发现本地试卷", "当前选择的目录下未检索到包含 content.json 的题目文件夹", |ui| {
             ui.label("请先打开官方 e听说 PC 端下载作业，或使用上方【选择其他自定义目录】手动指定作业文件夹。");
         });

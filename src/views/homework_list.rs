@@ -30,59 +30,55 @@ fn refresh_current_category(state: &mut AppState) {
         return;
     }
 
+    if state.homework_refreshing {
+        return;
+    }
+
+    state.homework_refreshing = true;
+
     if let Some(ref la_sess) = state.la_session {
         crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
     }
 
-    match state.selected_category {
-        HomeworkCategory::Current => {
-            match CloudClient::get_homework_list(&state.session, "1") {
-                Ok(items) => {
-                    state.homework_items = items;
-                    state.notification = Some((
-                        format!("成功获取到 {} 份当前日常作业", state.homework_items.len()),
-                        InfoBarKind::Success,
-                    ));
+    let tx = state.async_worker_tx.clone();
+    let session = state.session.clone();
+    let cat = state.selected_category;
+
+    std::thread::spawn(move || {
+        let result = match cat {
+            HomeworkCategory::Current => {
+                CloudClient::get_homework_list(&session, "1")
+            }
+            HomeworkCategory::History => {
+                CloudClient::get_homework_list(&session, "2")
+            }
+            HomeworkCategory::VocabPk => {
+                let mut all = Vec::new();
+                let mut err = None;
+                match CloudClient::get_homework_list(&session, "1") {
+                    Ok(curr) => all.extend(curr),
+                    Err(e) => err = Some(e),
                 }
-                Err(e) => {
-                    state.notification = Some((format!("获取当前作业失败: {}", e), InfoBarKind::Error));
+                match CloudClient::get_homework_list(&session, "2") {
+                    Ok(hist) => all.extend(hist),
+                    Err(e) => if err.is_none() { err = Some(e); },
+                }
+                if all.is_empty() && let Some(e) = err {
+                    Err(e)
+                } else {
+                    let mut seen = std::collections::HashSet::new();
+                    all.retain(|h| seen.insert(h.id.clone()));
+                    all.retain(|h| h.is_pk_or_vocab());
+                    Ok(all)
                 }
             }
-        }
-        HomeworkCategory::History => {
-            match CloudClient::get_homework_list(&state.session, "2") {
-                Ok(items) => {
-                    state.homework_items = items;
-                    state.notification = Some((
-                        format!("成功获取到 {} 份历史归档作业", state.homework_items.len()),
-                        InfoBarKind::Success,
-                    ));
-                }
-                Err(e) => {
-                    state.notification = Some((format!("获取历史作业失败: {}", e), InfoBarKind::Error));
-                }
-            }
-        }
-        HomeworkCategory::VocabPk => {
-            let mut all = Vec::new();
-            if let Ok(curr) = CloudClient::get_homework_list(&state.session, "1") {
-                all.extend(curr);
-            }
-            if let Ok(hist) = CloudClient::get_homework_list(&state.session, "2") {
-                all.extend(hist);
-            }
-            let mut seen = std::collections::HashSet::new();
-            all.retain(|h| seen.insert(h.id.clone()));
-            all.retain(|h| h.is_pk_or_vocab());
-            let pk_count = all.len();
-            state.homework_items = all;
-            state.notification = Some((
-                format!("成功检索并汇集 {} 份在线词汇PK竞技任务", pk_count),
-                InfoBarKind::Success,
-            ));
-        }
-        HomeworkCategory::Local => {}
-    }
+            HomeworkCategory::Local => Ok(Vec::new()),
+        };
+
+        let _ = tx.send(crate::state::SecureWorkerMessage::new(
+            crate::state::AsyncWorkerEvent::HomeworkRefreshResult(result),
+        ));
+    });
 }
 
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
@@ -142,7 +138,12 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
             ui.separator();
 
-            if action_btn(ui, "🔄 刷新列表").clicked() {
+            let refresh_btn_text = if state.homework_refreshing {
+                "[ ⏳ 同步中... ]"
+            } else {
+                "🔄 刷新列表"
+            };
+            if action_btn(ui, refresh_btn_text).clicked() && !state.homework_refreshing {
                 refresh_current_category(state);
             }
 
@@ -211,6 +212,12 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     ui.add_space(6.0);
 
     if display_items.is_empty() {
+        if state.homework_refreshing {
+            ui.card("正在同步", "正在安全同步云端试卷与任务...", |ui| {
+                ui.label(RichText::new("⏳ 正在安全同步云端试卷与任务，请稍候...").color(Color32::from_rgb(0, 180, 255)));
+            });
+            return;
+        }
         ui.card("暂无匹配作业", "未找到符合当前筛选条件的试卷", |ui| {
             ui.label("当前分类或筛选条件下暂无作业。您可以点击上方的【🔄 刷新列表】拉取最新列表，或切换不同的分类标签。");
             if !state.session.is_logged_in {

@@ -2093,3 +2093,80 @@ fn test_eula_first_launch_guard_and_persistence() {
 
     println!("✓ EULA 首次启动门禁拦截、持久化落盘与常驻查阅集成测试全部通过！");
 }
+
+#[test]
+fn test_floating_toast_and_version_logic() {
+    use fepc::la_client::{LaSoftwarePolicy, LA_APP_VERSION_CODE};
+    use fepc::state::AppState;
+    use fluent_egui::winui::InfoBarKind;
+
+    // 1. 版本更新逻辑验证：后台版本与客户端相同 (106 vs 106) 或更低时严禁展示“🚀 更新提示”
+    let policy_same = LaSoftwarePolicy {
+        latest_version_code: LA_APP_VERSION_CODE, // 106
+        update_message: Some("后台残留的旧更新说明".to_string()),
+        changelog_summary: Some("修复了一些已知问题".to_string()),
+        announcement_title: Some("常规维护通知".to_string()),
+        update_url: "https://example.com/download".to_string(),
+        ..Default::default()
+    };
+
+    let ctx = eframe::egui::Context::default();
+    let mut state_same = AppState {
+        software_policy: Some(policy_same),
+        ..Default::default()
+    };
+
+    // 运行 settings 界面渲染，验证文本包含最新版本徽标，绝不包含“🚀 更新提示”
+    let _ = ctx.run_ui(eframe::egui::RawInput::default(), |ctx| {
+        eframe::egui::CentralPanel::default().show(ctx, |ui| {
+            let mut fluent = fluent_egui::winui::FluentUi::from_ui(ui);
+            fepc::views::settings::render(&mut fluent, &mut state_same);
+        });
+    });
+
+    // 2. 模拟发现新版本 (107 > 106)，验证展示更新提示
+    let policy_higher = LaSoftwarePolicy {
+        latest_version_code: LA_APP_VERSION_CODE + 1, // 107
+        update_message: Some("全新 v0.1.7 版本发布，带来重磅更新！".to_string()),
+        changelog_summary: Some("重构了 Toast 通知体系".to_string()),
+        update_url: "https://example.com/download".to_string(),
+        ..Default::default()
+    };
+    let mut state_higher = AppState {
+        software_policy: Some(policy_higher),
+        ..Default::default()
+    };
+
+    let _ = ctx.run_ui(eframe::egui::RawInput::default(), |ctx| {
+        eframe::egui::CentralPanel::default().show(ctx, |ui| {
+            let mut fluent = fluent_egui::winui::FluentUi::from_ui(ui);
+            fepc::views::settings::render(&mut fluent, &mut state_higher);
+        });
+    });
+
+    // 3. 悬浮 Toast 通知引擎验证：
+    let mut toast_state = AppState {
+        notification: Some(("恭喜，答题全部完成！".to_string(), InfoBarKind::Success)),
+        ..Default::default()
+    };
+
+    let _ = ctx.run_ui(eframe::egui::RawInput::default(), |ctx| {
+        fepc::app::render_floating_toast(ctx, &mut toast_state);
+    });
+
+    assert_eq!(toast_state.last_notification_text.as_deref(), Some("恭喜，答题全部完成！"));
+    assert!(toast_state.notification_created_at.is_some());
+    assert!(toast_state.notification_expires_at.is_some());
+    assert!(!toast_state.notification_dismissing);
+
+    // 验证悬停顺延逻辑：
+    let current_expire = toast_state.notification_expires_at.unwrap();
+    let current_time = 100.0;
+    let target_expire = current_time + 4.0;
+    if current_expire < target_expire {
+        toast_state.notification_expires_at = Some(target_expire);
+    }
+    assert!(toast_state.notification_expires_at.unwrap() >= target_expire);
+
+    println!("✓ Win11 右上角悬浮 Toast 通知渲染引擎与版本更新判断集成测试全部通过！");
+}

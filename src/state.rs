@@ -22,6 +22,64 @@ pub enum AnswerViewMode {
     Concise,
 }
 
+#[derive(Debug)]
+pub enum AsyncWorkerEvent {
+    LaLoginResult(Result<crate::la_client::LaSession, String>),
+    CloudSessionSyncResult(
+        Option<crate::models::UserSession>,
+        Option<crate::la_client::LaCloudSession>,
+        Option<Vec<crate::models::HomeworkItem>>,
+        Option<Vec<crate::la_client::LaDevice>>,
+    ),
+    HomeworkRefreshResult(Result<Vec<crate::models::HomeworkItem>, String>),
+    LocalScanResult(Vec<crate::models::HomeworkItem>),
+}
+
+#[derive(Debug)]
+pub struct SecureWorkerMessage {
+    pub payload: AsyncWorkerEvent,
+    pub timestamp: u64,
+    pub salt: u64,
+    pub mask: u64,
+}
+
+impl SecureWorkerMessage {
+    pub fn new(payload: AsyncWorkerEvent) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let salt = {
+            let u = uuid::Uuid::new_v4();
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&u.as_bytes()[0..8]);
+            u64::from_le_bytes(b)
+        };
+        let mask = Self::calculate_mask(timestamp, salt);
+        Self {
+            payload,
+            timestamp,
+            salt,
+            mask,
+        }
+    }
+
+    #[inline(never)]
+    pub fn calculate_mask(timestamp: u64, salt: u64) -> u64 {
+        crate::themida_tiger_white!({
+            let mut h = (timestamp ^ salt).wrapping_mul(0x9E3779B97F4A7C15);
+            h = (h ^ (h >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            h = (h ^ (h >> 27)).wrapping_mul(0x94D049BB133111EB);
+            h ^ (h >> 31) ^ salt.rotate_left(17)
+        })
+    }
+
+    #[inline(never)]
+    pub fn is_valid(&self) -> bool {
+        self.mask == Self::calculate_mask(self.timestamp, self.salt)
+    }
+}
+
 pub struct AppState {
     pub current_tab: NavTab,
     pub session: UserSession,
@@ -37,6 +95,13 @@ pub struct AppState {
     pub local_device_code: Option<String>,
     pub local_accounts: Vec<crate::models::LocalAccountInfo>,
     pub local_scanning: bool,
+    pub homework_refreshing: bool,
+    pub la_login_in_progress: bool,
+    pub la_login_stage_text: String,
+
+    // 跨线程安全通信信道 (动态随机校验掩码与防篡改防护)
+    pub async_worker_tx: std::sync::mpsc::Sender<SecureWorkerMessage>,
+    pub async_worker_rx: std::sync::mpsc::Receiver<SecureWorkerMessage>,
 
     // 主题、外观与页面转场动效
     pub theme_config: ThemeConfig,
@@ -123,6 +188,7 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        let (async_worker_tx, async_worker_rx) = std::sync::mpsc::channel();
         Self {
             current_tab: NavTab::HomeworkList,
             session: UserSession::default(),
@@ -138,6 +204,11 @@ impl Default for AppState {
             local_device_code: None,
             local_accounts: Vec::new(),
             local_scanning: false,
+            homework_refreshing: false,
+            la_login_in_progress: false,
+            la_login_stage_text: String::new(),
+            async_worker_tx,
+            async_worker_rx,
             theme_config: ThemeConfig::new(FluentTheme::Dark).with_animations(true).with_material_opacity(1.0),
             backdrop_kind: BackdropKind::None,
             nav_revision: 1,
@@ -218,6 +289,145 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// 获取异步 Worker 消息发送器克隆
+    pub fn worker_sender(&self) -> std::sync::mpsc::Sender<SecureWorkerMessage> {
+        self.async_worker_tx.clone()
+    }
+
+    /// 向信道安全发送 Worker 事件
+    pub fn send_worker_event(tx: &std::sync::mpsc::Sender<SecureWorkerMessage>, event: AsyncWorkerEvent) {
+        let _ = tx.send(SecureWorkerMessage::new(event));
+    }
+
+    /// 轮询并消费跨线程安全异步 Worker 事件 (Tier 3: themida_tiger_white! 保护，严格单入口单出口)
+    pub fn poll_async_events(&mut self) {
+        let mut pending = Vec::new();
+        while let Ok(msg) = self.async_worker_rx.try_recv() {
+            pending.push(msg);
+        }
+
+        for msg in pending {
+            if msg.is_valid() {
+                self.dispatch_async_event(msg.payload);
+            } else {
+                eprintln!("[Security] 跨线程异步 Worker 事件随机掩码校验失败，防御性阻断潜在内存篡改注入！");
+            }
+        }
+    }
+
+    fn dispatch_async_event(&mut self, event: AsyncWorkerEvent) {
+        match event {
+            AsyncWorkerEvent::LaLoginResult(res) => {
+                match res {
+                    Ok(sess) => {
+                        crate::la_client::sync_auth_to_resolver(&sess.access_token);
+                        self.la_session = Some(sess);
+                        self.la_password_input.clear();
+                        self.la_captcha_needed = false;
+                        self.la_captcha_token.clear();
+                        self.la_login_stage_text = "正在同步云端托管会话与试卷...".to_string();
+                    }
+                    Err(e) => {
+                        self.la_login_in_progress = false;
+                        self.la_login_stage_text.clear();
+                        if e.contains("人机验证") {
+                            self.la_captcha_needed = true;
+                            if self.captcha_server.is_none() {
+                                if let Ok(srv) = crate::utils::captcha_server::CaptchaServer::start() {
+                                    let port = srv.port();
+                                    self.captcha_server = Some(srv);
+                                    let _ = open::that(format!("http://127.0.0.1:{port}/"));
+                                }
+                            } else if let Some(srv) = &self.captcha_server {
+                                let _ = open::that(format!("http://127.0.0.1:{}/", srv.port()));
+                            }
+                            self.notification = Some((
+                                "需要完成人机安全验证，已为您在浏览器打开验证页面".to_string(),
+                                InfoBarKind::Warning,
+                            ));
+                        } else {
+                            self.notification = Some((
+                                format!("登录失败: {e}"),
+                                InfoBarKind::Error,
+                            ));
+                        }
+                    }
+                }
+            }
+            AsyncWorkerEvent::CloudSessionSyncResult(user_sess_opt, cloud_sess_opt, hws_opt, devs_opt) => {
+                let was_logging_in = self.la_login_in_progress;
+                self.la_login_in_progress = false;
+                self.la_login_stage_text.clear();
+
+                if let Some(user_sess) = user_sess_opt {
+                    self.session = user_sess;
+                }
+                if let Some(cloud_sess) = cloud_sess_opt {
+                    self.la_cloud_session = Some(cloud_sess);
+                }
+                if let Some(hws) = hws_opt {
+                    self.homework_items = hws;
+                }
+                if let Some(devs) = devs_opt {
+                    self.la_devices = devs;
+                }
+
+                if was_logging_in {
+                    if self.session.is_logged_in {
+                        self.notification = Some((
+                            format!("LA 会员登录成功！已自动托管激活 ETS100 学生会话 ({})", self.session.user_name),
+                            InfoBarKind::Success,
+                        ));
+                    } else if let Some(ref sess) = self.la_session {
+                        self.notification = Some((
+                            format!("欢迎回来，{}！", sess.user.username),
+                            InfoBarKind::Success,
+                        ));
+                    }
+                } else if self.session.is_logged_in {
+                    self.notification = Some((
+                        "云端做题会话激活成功！已同步最新作业".to_string(),
+                        InfoBarKind::Success,
+                    ));
+                }
+            }
+            AsyncWorkerEvent::HomeworkRefreshResult(res) => {
+                self.homework_refreshing = false;
+                match res {
+                    Ok(items) => {
+                        let count = items.len();
+                        self.homework_items = items;
+                        let desc = match self.selected_category {
+                            crate::models::HomeworkCategory::Current => "当前日常作业",
+                            crate::models::HomeworkCategory::History => "历史归档作业",
+                            crate::models::HomeworkCategory::VocabPk => "在线词汇PK竞技任务",
+                            crate::models::HomeworkCategory::Local => "本地试卷",
+                        };
+                        self.notification = Some((
+                            format!("成功获取到 {} 份{}", count, desc),
+                            InfoBarKind::Success,
+                        ));
+                    }
+                    Err(e) => {
+                        self.notification = Some((
+                            format!("获取作业失败: {}", e),
+                            InfoBarKind::Error,
+                        ));
+                    }
+                }
+            }
+            AsyncWorkerEvent::LocalScanResult(items) => {
+                self.local_scanning = false;
+                let count = items.len();
+                self.local_items = items;
+                self.notification = Some((
+                    format!("扫描完成，发现 {} 份本地试卷 (已建立极速索引)", count),
+                    InfoBarKind::Success,
+                ));
+            }
+        }
+    }
+
     /// 刷新当前选中本地目录的静态元数据 (仅在目录变更/初次加载时调用 1 次，严禁在 UI 渲染死循环中调用)
     pub fn refresh_selected_local_metadata(&mut self) {
         if let Some(ref dir) = self.selected_local_dir {
@@ -673,6 +883,72 @@ mod tests {
         assert!(state.auth_gate_modal_open);
         assert!(!state.auth_gate_modal_requires_login);
         assert!(state.auth_gate_modal_title.contains("会员"));
+    }
+
+    #[test]
+    fn test_secure_worker_message_mask_verification() {
+        let msg = SecureWorkerMessage::new(AsyncWorkerEvent::LocalScanResult(Vec::new()));
+        assert!(msg.is_valid(), "Initial message mask must be valid");
+
+        // 篡改时间戳
+        let tampered_time = SecureWorkerMessage {
+            payload: AsyncWorkerEvent::LocalScanResult(Vec::new()),
+            timestamp: msg.timestamp.wrapping_add(1),
+            salt: msg.salt,
+            mask: msg.mask,
+        };
+        assert!(!tampered_time.is_valid(), "Tampered timestamp must fail validation");
+
+        // 篡改盐
+        let tampered_salt = SecureWorkerMessage {
+            payload: AsyncWorkerEvent::LocalScanResult(Vec::new()),
+            timestamp: msg.timestamp,
+            salt: msg.salt.wrapping_add(1),
+            mask: msg.mask,
+        };
+        assert!(!tampered_salt.is_valid(), "Tampered salt must fail validation");
+
+        // 篡改掩码
+        let tampered_mask = SecureWorkerMessage {
+            payload: AsyncWorkerEvent::LocalScanResult(Vec::new()),
+            timestamp: msg.timestamp,
+            salt: msg.salt,
+            mask: msg.mask ^ 0xFF,
+        };
+        assert!(!tampered_mask.is_valid(), "Tampered mask must fail validation");
+    }
+
+    #[test]
+    fn test_async_worker_channel_and_poll_events() {
+        let mut state = AppState::default();
+        let tx = state.worker_sender();
+
+        // 1. 测试作业刷新事件安全消费
+        state.homework_refreshing = true;
+        let _ = tx.send(SecureWorkerMessage::new(AsyncWorkerEvent::HomeworkRefreshResult(Ok(Vec::new()))));
+        state.poll_async_events();
+        assert!(!state.homework_refreshing);
+        assert!(state.notification.as_ref().map(|n| &n.0).unwrap_or(&String::new()).contains("成功获取到 0 份"));
+
+        // 2. 测试本地试卷扫描事件安全消费
+        state.local_scanning = true;
+        let _ = tx.send(SecureWorkerMessage::new(AsyncWorkerEvent::LocalScanResult(Vec::new())));
+        state.poll_async_events();
+        assert!(!state.local_scanning);
+        assert!(state.notification.as_ref().map(|n| &n.0).unwrap_or(&String::new()).contains("扫描完成，发现 0 份"));
+
+        // 3. 测试防篡改过滤：恶意伪造消息被安全丢弃，不改变状态
+        state.homework_refreshing = true;
+        let forged = SecureWorkerMessage {
+            payload: AsyncWorkerEvent::HomeworkRefreshResult(Ok(Vec::new())),
+            timestamp: 123456,
+            salt: 999999,
+            mask: 0xDEADBEEF,
+        };
+        let _ = tx.send(forged);
+        state.poll_async_events();
+        // 伪造消息被丢弃，homework_refreshing 仍然保持不变
+        assert!(state.homework_refreshing);
     }
 }
 

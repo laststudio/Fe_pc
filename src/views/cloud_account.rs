@@ -334,34 +334,48 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
 
             responsive_flow(ui, |ui| {
                 if accent_action_btn(ui, "🚀 一键激活 / 刷新云端做题会话", None).clicked() {
-                    crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
-                    match LaClient::get_cloud_session(&la_sess.access_token, "") {
-                        Ok(cloud) => {
-                            let cloud_dev_code = if !cloud.device_code.is_empty() {
-                                cloud.device_code.clone()
-                            } else {
-                                LaClient::get_cloud_device_code(&la_sess.access_token).unwrap_or_else(|_| state.session.device_code.clone())
-                            };
-                            state.session = UserSession {
-                                phone: cloud.account_display.clone(),
-                                token: cloud.token.clone(),
-                                device_code: cloud_dev_code,
-                                parent_account_id: cloud.parent_account_id.clone(),
-                                user_name: cloud.account_display.clone(),
-                                is_logged_in: true,
-                            };
-                            state.la_cloud_session = Some(cloud);
-                            state.notification = Some(("云端做题会话激活成功！正在加载作业...".to_string(), InfoBarKind::Success));
-
-                            // 自动同步拉取最新作业
-                            if let Ok(hw_list) = CloudClient::get_homework_list(&state.session, "1") {
-                                state.homework_items = hw_list;
+                    let tx = state.async_worker_tx.clone();
+                    let token = la_sess.access_token.clone();
+                    let fallback_dev = state.session.device_code.clone();
+                    state.notification = Some(("正在同步云端做题会话与作业...".to_string(), InfoBarKind::Informational));
+                    std::thread::spawn(move || {
+                        crate::la_client::sync_auth_to_resolver(&token);
+                        match LaClient::get_cloud_session(&token, "") {
+                            Ok(cloud) => {
+                                let dev_code = if !cloud.device_code.is_empty() {
+                                    cloud.device_code.clone()
+                                } else {
+                                    LaClient::get_cloud_device_code(&token).unwrap_or(fallback_dev)
+                                };
+                                let user_name = if let Some(name) = cloud.selected_account.get("name").and_then(|v| v.as_str()) {
+                                    name.to_string()
+                                } else {
+                                    cloud.account_display.clone()
+                                };
+                                let user_sess = UserSession {
+                                    phone: cloud.account_display.clone(),
+                                    token: cloud.token.clone(),
+                                    device_code: dev_code,
+                                    parent_account_id: cloud.parent_account_id.clone(),
+                                    user_name,
+                                    is_logged_in: true,
+                                };
+                                let hws = CloudClient::get_homework_list(&user_sess, "1").ok();
+                                let devs = LaClient::list_devices(&token).ok();
+                                let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                                    crate::state::AsyncWorkerEvent::CloudSessionSyncResult(
+                                        Some(user_sess),
+                                        Some(cloud),
+                                        hws,
+                                        devs,
+                                    ),
+                                ));
+                            }
+                            Err(e) => {
+                                eprintln!("get_cloud_session err: {e}");
                             }
                         }
-                        Err(e) => {
-                            state.notification = Some((format!("获取云端中继会话失败: {e}。若未绑定学生账号，请先在网页端绑定后重试。"), InfoBarKind::Error));
-                        }
-                    }
+                    });
                 }
             });
         });
@@ -511,9 +525,23 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
             ui.add_space(8.0);
 
             responsive_flow(ui, |ui| {
-                if accent_action_btn(ui, "🔑 登录 LA 账号", None).clicked() {
-                    let u = state.la_username_input.trim();
-                    let p = &state.la_password_input;
+                let btn_text = if state.la_login_in_progress {
+                    let t = (ui.ctx().input(|i| i.time) * 4.0) as usize % 4;
+                    let spinner = ["◐", "◓", "◑", "◒"][t];
+                    let stage = if state.la_login_stage_text.is_empty() {
+                        "正在安全鉴权与同步会话..."
+                    } else {
+                        &state.la_login_stage_text
+                    };
+                    format!("[ {} {} ]", spinner, stage)
+                } else {
+                    "🔑 登录 LA 账号".to_string()
+                };
+
+                let btn_resp = accent_action_btn(ui, &btn_text, None);
+                if !state.la_login_in_progress && btn_resp.clicked() {
+                    let u = state.la_username_input.trim().to_string();
+                    let p = state.la_password_input.clone();
 
                     if u.is_empty() || p.is_empty() {
                         state.notification = Some(("用户名和密码不能为空".to_string(), InfoBarKind::Warning));
@@ -523,68 +551,10 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                     let cap_token_opt = if state.la_captcha_token.trim().is_empty() {
                         None
                     } else {
-                        Some(state.la_captcha_token.trim())
+                        Some(state.la_captcha_token.trim().to_string())
                     };
 
-                    match LaClient::login(u, p, cap_token_opt) {
-                        Ok(sess) => {
-                            crate::la_client::sync_auth_to_resolver(&sess.access_token);
-                            state.la_session = Some(sess.clone());
-                            state.la_password_input.clear();
-                            state.la_captcha_needed = false;
-                            state.la_captcha_token.clear();
-                            state.notification = Some((format!("欢迎回来，{}！", sess.user.username), InfoBarKind::Success));
-
-                            let cloud_dev_code = LaClient::get_cloud_device_code(&sess.access_token).ok();
-                            if let Some(ref code) = cloud_dev_code
-                                && !code.is_empty() {
-                                state.session.device_code = code.clone();
-                            }
-
-                            // 尝试自动激活绑定的 ETS 云端会话
-                            if let Ok(cloud) = LaClient::get_cloud_session(&sess.access_token, "") {
-                                let dev_code = if !cloud.device_code.is_empty() {
-                                    cloud.device_code.clone()
-                                } else {
-                                    cloud_dev_code.unwrap_or_else(|| state.session.device_code.clone())
-                                };
-                                state.session = UserSession {
-                                    phone: cloud.account_display.clone(),
-                                    token: cloud.token.clone(),
-                                    device_code: dev_code,
-                                    parent_account_id: cloud.parent_account_id.clone(),
-                                    user_name: cloud.account_display.clone(),
-                                    is_logged_in: true,
-                                };
-                                state.la_cloud_session = Some(cloud);
-                                if let Ok(hw_list) = CloudClient::get_homework_list(&state.session, "1") {
-                                    state.homework_items = hw_list;
-                                }
-                            }
-
-                            // 预拉取设备列表
-                            if let Ok(devs) = LaClient::list_devices(&sess.access_token) {
-                                state.la_devices = devs;
-                            }
-                        }
-                        Err(e) => {
-                            if e.contains("人机验证") {
-                                state.la_captcha_needed = true;
-                                if state.captcha_server.is_none() {
-                                    if let Ok(srv) = crate::utils::captcha_server::CaptchaServer::start() {
-                                        let port = srv.port();
-                                        state.captcha_server = Some(srv);
-                                        let _ = open::that(format!("http://127.0.0.1:{port}/"));
-                                    }
-                                } else if let Some(srv) = &state.captcha_server {
-                                    let _ = open::that(format!("http://127.0.0.1:{}/", srv.port()));
-                                }
-                                state.notification = Some(("需要完成人机安全验证，已为您在浏览器打开验证页面".to_string(), InfoBarKind::Warning));
-                            } else {
-                                state.notification = Some((format!("登录失败: {e}"), InfoBarKind::Error));
-                            }
-                        }
-                    }
+                    start_async_la_login(state, u, p, cap_token_opt);
                 }
             });
         });
@@ -615,59 +585,104 @@ fn render_la_studio_tab(ui: &mut FluentUi, state: &mut AppState) {
                 ui.label("或手动粘贴已获取的验证 Token 登录：");
                 responsive_flow(ui, |ui| {
                     ui.add(egui::TextEdit::singleline(&mut state.la_captcha_token).hint_text("粘贴 cap_token").desired_width(180.0));
-                    if action_btn(ui, "带 Token 登录").clicked() {
-                        let u = state.la_username_input.trim();
-                        let p = &state.la_password_input;
-                        let token = state.la_captcha_token.trim();
+                    let token_btn_text = if state.la_login_in_progress {
+                        "[ ⏳ 正在安全鉴权... ]"
+                    } else {
+                        "带 Token 登录"
+                    };
+                    let token_btn_resp = action_btn(ui, token_btn_text);
+                    if !state.la_login_in_progress && token_btn_resp.clicked() {
+                        let u = state.la_username_input.trim().to_string();
+                        let p = state.la_password_input.clone();
+                        let token = state.la_captcha_token.trim().to_string();
                         if !token.is_empty() {
-                            match LaClient::login(u, p, Some(token)) {
-                                Ok(sess) => {
-                                    crate::la_client::sync_auth_to_resolver(&sess.access_token);
-                                    state.la_session = Some(sess.clone());
-                                    state.la_captcha_needed = false;
-                                    state.la_captcha_token.clear();
-                                    state.la_password_input.clear();
-                                    state.notification = Some((format!("欢迎回来，{}！", sess.user.username), InfoBarKind::Success));
-
-                                    let cloud_dev_code = LaClient::get_cloud_device_code(&sess.access_token).ok();
-                                    if let Some(ref code) = cloud_dev_code
-                                        && !code.is_empty() {
-                                        state.session.device_code = code.clone();
-                                    }
-
-                                    if let Ok(cloud) = LaClient::get_cloud_session(&sess.access_token, "") {
-                                        let dev_code = if !cloud.device_code.is_empty() {
-                                            cloud.device_code.clone()
-                                        } else {
-                                            cloud_dev_code.unwrap_or_else(|| state.session.device_code.clone())
-                                        };
-                                        state.session = UserSession {
-                                            phone: cloud.account_display.clone(),
-                                            token: cloud.token.clone(),
-                                            device_code: dev_code,
-                                            parent_account_id: cloud.parent_account_id.clone(),
-                                            user_name: cloud.account_display.clone(),
-                                            is_logged_in: true,
-                                        };
-                                        state.la_cloud_session = Some(cloud);
-                                        if let Ok(hw_list) = CloudClient::get_homework_list(&state.session, "1") {
-                                            state.homework_items = hw_list;
-                                        }
-                                    }
-                                    if let Ok(devs) = LaClient::list_devices(&sess.access_token) {
-                                        state.la_devices = devs;
-                                    }
-                                }
-                                Err(e) => {
-                                    state.notification = Some((format!("带 Token 登录失败: {e}"), InfoBarKind::Error));
-                                }
-                            }
+                            start_async_la_login(state, u, p, Some(token));
                         }
                     }
                 });
             });
         }
     }
+}
+
+/// 启动 LA 账号全流程安全异步登录与会话同步流水线 (转移 5 步网络请求至后台 Worker 线程)
+pub fn start_async_la_login(
+    state: &mut AppState,
+    u: String,
+    p: String,
+    cap_token_opt: Option<String>,
+) {
+    if state.la_login_in_progress {
+        return;
+    }
+    state.la_login_in_progress = true;
+    state.la_login_stage_text = "正在安全鉴权与同步会话...".to_string();
+
+    let tx = state.async_worker_tx.clone();
+    let fallback_dev_code = state.session.device_code.clone();
+
+    std::thread::spawn(move || {
+        let cap_token_ref = cap_token_opt.as_deref().filter(|s| !s.trim().is_empty());
+        // 第 1 步：LaClient::login(u, p, cap_token_opt)
+        match LaClient::login(&u, &p, cap_token_ref) {
+            Ok(sess) => {
+                crate::la_client::sync_auth_to_resolver(&sess.access_token);
+                let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                    crate::state::AsyncWorkerEvent::LaLoginResult(Ok(sess.clone())),
+                ));
+
+                // 第 2 步：LaClient::get_cloud_device_code(&sess.access_token)
+                let cloud_dev_code = LaClient::get_cloud_device_code(&sess.access_token).ok();
+
+                // 第 3 步：LaClient::get_cloud_session(&sess.access_token, "")
+                let cloud_res = LaClient::get_cloud_session(&sess.access_token, "");
+                let (user_sess_opt, cloud_sess_opt, hws_opt) = match cloud_res {
+                    Ok(cloud) => {
+                        let dev_code = if !cloud.device_code.is_empty() {
+                            cloud.device_code.clone()
+                        } else {
+                            cloud_dev_code.unwrap_or_else(|| fallback_dev_code.clone())
+                        };
+                        let user_name = if let Some(name) = cloud.selected_account.get("name").and_then(|v| v.as_str()) {
+                            name.to_string()
+                        } else {
+                            cloud.account_display.clone()
+                        };
+                        let user_sess = UserSession {
+                            phone: cloud.account_display.clone(),
+                            token: cloud.token.clone(),
+                            device_code: dev_code,
+                            parent_account_id: cloud.parent_account_id.clone(),
+                            user_name,
+                            is_logged_in: true,
+                        };
+
+                        // 第 4 步：CloudClient::get_homework_list(&state.session, "1")
+                        let hws = CloudClient::get_homework_list(&user_sess, "1").ok();
+                        (Some(user_sess), Some(cloud), hws)
+                    }
+                    Err(_) => (None, None, None),
+                };
+
+                // 第 5 步：LaClient::list_devices(&sess.access_token)
+                let devs = LaClient::list_devices(&sess.access_token).ok();
+
+                let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                    crate::state::AsyncWorkerEvent::CloudSessionSyncResult(
+                        user_sess_opt,
+                        cloud_sess_opt,
+                        hws_opt,
+                        devs,
+                    ),
+                ));
+            }
+            Err(e) => {
+                let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                    crate::state::AsyncWorkerEvent::LaLoginResult(Err(e)),
+                ));
+            }
+        }
+    });
 }
 
 fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {

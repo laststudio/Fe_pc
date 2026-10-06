@@ -477,15 +477,43 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             if !display_msg.trim().is_empty() {
                 ui.label(RichText::new(display_msg).size(12.0));
             }
-            if let Some(ref update) = policy.update_message
-                && !update.trim().is_empty() {
-                ui.label(RichText::new(format!("🚀 更新提示: {}", update)).size(12.0).color(Color32::from_rgb(0, 150, 255)));
+            // 版本更新提示与最新正式版本徽标判断 (严格按 policy.latest_version_code > LA_APP_VERSION_CODE)
+            let is_new_version = policy.latest_version_code > crate::la_client::LA_APP_VERSION_CODE;
+            if is_new_version {
+                let update_msg = policy.update_message.as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or("发现新版本，建议及时更新以获取最新功能与体验。");
+                ui.label(RichText::new(format!("🚀 更新提示: {}", update_msg)).size(12.0).color(Color32::from_rgb(0, 150, 255)));
+                if let Some(ref changelog) = policy.changelog_summary
+                    && !changelog.trim().is_empty() {
+                    ui.label(RichText::new(format!("📝 版本日志: {}", changelog)).size(11.5).color(Color32::from_gray(160)));
+                }
+            } else {
+                ui.label(
+                    RichText::new(format!("✔ 当前已是最新正式版本 (v{})", env!("CARGO_PKG_VERSION")))
+                        .size(12.5)
+                        .strong()
+                        .color(Color32::from_rgb(76, 175, 80)),
+                );
+                if let Some(ref changelog) = policy.changelog_summary
+                    && !changelog.trim().is_empty() {
+                    ui.label(RichText::new(format!("📝 版本日志: {}", changelog)).size(11.5).color(Color32::from_gray(160)));
+                }
             }
-            if let Some(ref changelog) = policy.changelog_summary
-                && !changelog.trim().is_empty() {
-                ui.label(RichText::new(format!("📝 版本变更: {}", changelog)).size(11.5).color(Color32::from_gray(160)));
-            }
+
             responsive_flow(ui, |ui| {
+                if is_new_version {
+                    let dl_url = if !policy.update_url.trim().is_empty() {
+                        Some(policy.update_url.as_str())
+                    } else {
+                        policy.announcement_url.as_deref().filter(|u| !u.trim().is_empty())
+                    };
+                    if let Some(url) = dl_url {
+                        if action_btn(ui, "⬇ 前往下载新版本").clicked() {
+                            let _ = open::that(url);
+                        }
+                    }
+                }
                 if action_btn(ui, "📢 查看公告与版本详情弹窗").clicked() {
                     state.announcement_modal_open = true;
                 }
