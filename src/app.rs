@@ -46,7 +46,8 @@ impl FepcApp {
                 state.notification = Some((format!("【公告: {title}】{msg}"), InfoBarKind::Informational));
             }
             if let Some(ref title) = policy.announcement_title
-                && !title.trim().is_empty() {
+                && !title.trim().is_empty()
+                && screenshot_target.is_none() {
                 state.announcement_modal_open = true;
             }
             state.software_policy = Some(policy);

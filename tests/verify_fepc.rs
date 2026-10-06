@@ -2171,3 +2171,67 @@ fn test_floating_toast_and_version_logic() {
 
     println!("✓ Win11 右上角悬浮 Toast 通知渲染引擎与版本更新判断集成测试全部通过！");
 }
+
+#[test]
+fn test_ets_local_db_ui_and_state_machine() {
+    use fepc::state::AppState;
+    use fepc::ets_local_db::EtsLocalAccount;
+
+    let mut state = AppState::default();
+    state.la_active_tab = 1; // ETS 直连标签页
+
+    // 1. 测试未扫描时进入 UI，自动触发 scan_ets_local_db 逻辑
+    assert!(!state.ets_local_scanned);
+    let ctx = eframe::egui::Context::default();
+    let _ = ctx.run_ui(eframe::egui::RawInput::default(), |ctx| {
+        eframe::egui::CentralPanel::default().show(ctx, |ui| {
+            let mut fluent = fluent_egui::winui::FluentUi::from_ui(ui);
+            fepc::views::cloud_account::render(&mut fluent, &mut state);
+        });
+    });
+    assert!(state.ets_local_scanned);
+
+    // 2. 插入测试账号进行严格断言
+    let mock_account = EtsLocalAccount {
+        account: "13912345678".to_string(),
+        name: "李小明".to_string(),
+        cover_url: "".to_string(),
+        token: "jwt_mock_token_abcdef123".to_string(),
+        password_plain: Some("mypassword888".to_string()),
+        cur_res_item_id: "res_item_888".to_string(),
+        student_card_no: "BJ170163553G".to_string(),
+        student_card_pwd: "card_pwd".to_string(),
+        school_name: "北京市十一学校顺义学校".to_string(),
+        class_name: "5".to_string(),
+        teacher_name: "王老师".to_string(),
+        expiry_time: "2027-07-31 21:14:16".to_string(),
+        grade_name: "高一".to_string(),
+    };
+    state.ets_local_accounts.insert(0, mock_account);
+
+    // 3. 测试自动填充登录表单
+    state.fill_ets_local_login_form(0);
+    assert_eq!(state.session.phone, "13912345678");
+    assert_eq!(state.login_password, "mypassword888");
+
+    // 4. 测试免密直接接管 (零顶号)
+    let res = state.apply_ets_local_direct_session(0);
+    assert!(res.is_ok());
+    assert!(state.session.is_logged_in);
+    assert_eq!(state.session.phone, "13912345678");
+    assert_eq!(state.session.token, "jwt_mock_token_abcdef123");
+    assert_eq!(state.session.user_name, "李小明");
+    assert_eq!(state.session.parent_account_id, "res_item_888");
+    assert!(state.homework_refreshing);
+
+    // 5. 测试已建立直连会话时的 UI 渲染 (展示匹配的本地档案卡片)
+    let _ = ctx.run_ui(eframe::egui::RawInput::default(), |ctx| {
+        eframe::egui::CentralPanel::default().show(ctx, |ui| {
+            let mut fluent = fluent_egui::winui::FluentUi::from_ui(ui);
+            fepc::views::cloud_account::render(&mut fluent, &mut state);
+        });
+    });
+
+    println!("✓ 本地 ETS.db 账号状态机与 UI 联动集成测试全部通过！");
+}
+

@@ -99,6 +99,13 @@ pub struct AppState {
     pub la_login_in_progress: bool,
     pub la_login_stage_text: String,
 
+    // 本地 ETS.db 数据库与账号缓存
+    pub ets_local_db_path: Option<String>,
+    pub ets_local_accounts: Vec<crate::ets_local_db::EtsLocalAccount>,
+    pub ets_local_scanning: bool,
+    pub ets_local_scanned: bool,
+    pub local_ets_answer_matched: bool,
+
     // 跨线程安全通信信道 (动态随机校验掩码与防篡改防护)
     pub async_worker_tx: std::sync::mpsc::Sender<SecureWorkerMessage>,
     pub async_worker_rx: std::sync::mpsc::Receiver<SecureWorkerMessage>,
@@ -207,6 +214,11 @@ impl Default for AppState {
             homework_refreshing: false,
             la_login_in_progress: false,
             la_login_stage_text: String::new(),
+            ets_local_db_path: None,
+            ets_local_accounts: Vec::new(),
+            ets_local_scanning: false,
+            ets_local_scanned: false,
+            local_ets_answer_matched: false,
             async_worker_tx,
             async_worker_rx,
             theme_config: ThemeConfig::new(FluentTheme::Dark).with_animations(true).with_material_opacity(1.0),
@@ -396,6 +408,21 @@ impl AppState {
                 match res {
                     Ok(items) => {
                         let count = items.len();
+                        if count == 0 && self.homework_items.is_empty() {
+                            if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+                                if let Ok(cached) = crate::ets_local_db::read_cached_homeworks(&db_path) {
+                                    if !cached.is_empty() {
+                                        let c_count = cached.len();
+                                        self.homework_items = cached;
+                                        self.notification = Some((
+                                            format!("📂 已自动加载本地离线作业列表 ({} 项)", c_count),
+                                            InfoBarKind::Informational,
+                                        ));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
                         self.homework_items = items;
                         let desc = match self.selected_category {
                             crate::models::HomeworkCategory::Current => "当前日常作业",
@@ -409,6 +436,21 @@ impl AppState {
                         ));
                     }
                     Err(e) => {
+                        if self.homework_items.is_empty() {
+                            if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+                                if let Ok(cached) = crate::ets_local_db::read_cached_homeworks(&db_path) {
+                                    if !cached.is_empty() {
+                                        let c_count = cached.len();
+                                        self.homework_items = cached;
+                                        self.notification = Some((
+                                            format!("📂 已自动加载本地离线作业列表 ({} 项)", c_count),
+                                            InfoBarKind::Informational,
+                                        ));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
                         self.notification = Some((
                             format!("获取作业失败: {}", e),
                             InfoBarKind::Error,
@@ -657,6 +699,137 @@ impl AppState {
         self.eula_modal_open = false;
         self.eula_is_first_launch = false;
         self.eula_checkbox_checked = true;
+    }
+
+    /// 扫描/重新检测本地 ETS.db 数据库并载入账号列表
+    pub fn scan_ets_local_db(&mut self) {
+        self.ets_local_scanning = true;
+        let db_path = if let Some(ref path_str) = self.ets_local_db_path {
+            let p = PathBuf::from(path_str);
+            if p.exists() {
+                Some(p)
+            } else {
+                eprintln!("[ETS Local DB] 指定的数据库文件不存在: {}", p.display());
+                None
+            }
+        } else {
+            crate::ets_local_db::detect_db_path()
+        };
+
+        if let Some(path) = db_path {
+            self.ets_local_db_path = Some(path.to_string_lossy().to_string());
+            match crate::ets_local_db::read_local_accounts(&path) {
+                Ok(accounts) => {
+                    self.ets_local_accounts = accounts;
+                }
+                Err(e) => {
+                    eprintln!("[ETS Local DB] 读取本地账号失败: {e}");
+                    self.ets_local_accounts.clear();
+                }
+            }
+        } else {
+            self.ets_local_accounts.clear();
+        }
+
+        self.ets_local_scanning = false;
+        self.ets_local_scanned = true;
+    }
+
+    /// 触发刷新云端作业列表（后台异步加载）
+    pub fn refresh_cloud_homework(&mut self) {
+        if !self.session.is_logged_in {
+            return;
+        }
+        self.homework_refreshing = true;
+        if let Some(ref la_sess) = self.la_session {
+            crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+        }
+        let tx = self.async_worker_tx.clone();
+        let session = self.session.clone();
+        let cat = self.selected_category;
+        std::thread::spawn(move || {
+            let result = match cat {
+                crate::models::HomeworkCategory::Current => {
+                    crate::cloud_client::CloudClient::get_homework_list(&session, "1")
+                }
+                crate::models::HomeworkCategory::History => {
+                    crate::cloud_client::CloudClient::get_homework_list(&session, "2")
+                }
+                crate::models::HomeworkCategory::VocabPk => {
+                    let mut all = Vec::new();
+                    let mut err = None;
+                    match crate::cloud_client::CloudClient::get_homework_list(&session, "1") {
+                        Ok(curr) => all.extend(curr),
+                        Err(e) => err = Some(e),
+                    }
+                    match crate::cloud_client::CloudClient::get_homework_list(&session, "2") {
+                        Ok(hist) => all.extend(hist),
+                        Err(e) => {
+                            if err.is_none() {
+                                err = Some(e);
+                            }
+                        }
+                    }
+                    if all.is_empty() && let Some(e) = err {
+                        Err(e)
+                    } else {
+                        let mut seen = std::collections::HashSet::new();
+                        all.retain(|h| seen.insert(h.id.clone()));
+                        all.retain(|h| h.is_pk_or_vocab());
+                        Ok(all)
+                    }
+                }
+                crate::models::HomeworkCategory::Local => Ok(Vec::new()),
+            };
+            let _ = tx.send(crate::state::SecureWorkerMessage::new(
+                crate::state::AsyncWorkerEvent::HomeworkRefreshResult(result),
+            ));
+        });
+    }
+
+    /// 100% 零顶号直接接管本地 ETS 账号会话
+    pub fn apply_ets_local_direct_session(&mut self, idx: usize) -> Result<(), String> {
+        let acc = self.ets_local_accounts.get(idx).ok_or("账号索引越界")?.clone();
+        if acc.token.trim().is_empty() {
+            return Err("该账号在本地未保存有效 Token".to_string());
+        }
+
+        self.session = crate::models::UserSession {
+            phone: acc.account.clone(),
+            token: acc.token.clone(),
+            device_code: if !self.session.device_code.is_empty() {
+                self.session.device_code.clone()
+            } else {
+                crate::cloud_client::CloudClient::get_or_generate_device_code(None)
+            },
+            parent_account_id: acc.cur_res_item_id.clone(),
+            user_name: acc.name.clone(),
+            is_logged_in: true,
+        };
+        crate::cloud_client::CloudClient::save_session(&self.session);
+
+        self.refresh_cloud_homework();
+
+        self.notification = Some((
+            "✔ 已无感接管本地 e听说 会话（零顶号），正在同步作业列表...".to_string(),
+            InfoBarKind::Success,
+        ));
+
+        Ok(())
+    }
+
+    /// 自动将本地已保存账号和解密明文密码填入登录表单
+    pub fn fill_ets_local_login_form(&mut self, idx: usize) {
+        if let Some(acc) = self.ets_local_accounts.get(idx).cloned() {
+            self.session.phone = acc.account.clone();
+            if let Some(ref pwd) = acc.password_plain {
+                self.login_password = pwd.clone();
+            }
+            self.notification = Some((
+                "已自动填入账号与解密密码，点击【立即登录】即可获取全新 Token".to_string(),
+                InfoBarKind::Success,
+            ));
+        }
     }
 }
 
@@ -928,7 +1101,8 @@ mod tests {
         let _ = tx.send(SecureWorkerMessage::new(AsyncWorkerEvent::HomeworkRefreshResult(Ok(Vec::new()))));
         state.poll_async_events();
         assert!(!state.homework_refreshing);
-        assert!(state.notification.as_ref().map(|n| &n.0).unwrap_or(&String::new()).contains("成功获取到 0 份"));
+        let notif_str = state.notification.as_ref().map(|n| n.0.as_str()).unwrap_or("");
+        assert!(notif_str.contains("成功获取到") || notif_str.contains("已自动加载本地离线作业列表"));
 
         // 2. 测试本地试卷扫描事件安全消费
         state.local_scanning = true;
@@ -949,6 +1123,71 @@ mod tests {
         state.poll_async_events();
         // 伪造消息被丢弃，homework_refreshing 仍然保持不变
         assert!(state.homework_refreshing);
+    }
+
+    #[test]
+    fn test_ets_local_state_machine() {
+        let mut state = AppState::default();
+        assert!(!state.ets_local_scanned);
+        assert!(!state.ets_local_scanning);
+        assert!(state.ets_local_accounts.is_empty());
+
+        // 模拟一个本地账号
+        let mock_acc = crate::ets_local_db::EtsLocalAccount {
+            account: "13800138000".to_string(),
+            name: "张三".to_string(),
+            cover_url: "".to_string(),
+            token: "mock_jwt_token_12345".to_string(),
+            password_plain: Some("plain_pass_123".to_string()),
+            cur_res_item_id: "res_999".to_string(),
+            student_card_no: "BJ123456".to_string(),
+            student_card_pwd: "pass".to_string(),
+            school_name: "测试学校".to_string(),
+            class_name: "3".to_string(),
+            teacher_name: "李老师".to_string(),
+            expiry_time: "2027-01-01".to_string(),
+            grade_name: "高一".to_string(),
+        };
+        state.ets_local_accounts.push(mock_acc);
+
+        // 测试自动填充表单
+        state.fill_ets_local_login_form(0);
+        assert_eq!(state.session.phone, "13800138000");
+        assert_eq!(state.login_password, "plain_pass_123");
+        assert!(state.notification.as_ref().unwrap().0.contains("已自动填入账号与解密密码"));
+
+        // 测试免密零顶号直接接管
+        let res = state.apply_ets_local_direct_session(0);
+        assert!(res.is_ok());
+        assert!(state.session.is_logged_in);
+        assert_eq!(state.session.token, "mock_jwt_token_12345");
+        assert_eq!(state.session.user_name, "张三");
+        assert_eq!(state.session.parent_account_id, "res_999");
+        assert!(state.homework_refreshing);
+        assert!(state.notification.as_ref().unwrap().0.contains("已无感接管本地 e听说 会话（零顶号）"));
+
+        // 测试空 Token 错误拦截
+        state.ets_local_accounts[0].token = "".to_string();
+        assert!(state.apply_ets_local_direct_session(0).is_err());
+
+        // 测试索引越界
+        assert!(state.apply_ets_local_direct_session(99).is_err());
+
+        // 测试不存在路径扫描
+        state.ets_local_db_path = Some("non_existent_ets_xyz.db".to_string());
+        state.scan_ets_local_db();
+        assert!(state.ets_local_scanned);
+        assert!(!state.ets_local_scanning);
+        assert!(state.ets_local_accounts.is_empty());
+
+        // 测试真实环境探测或扫描（若本地真实数据库存在）
+        let real_path = std::path::PathBuf::from(r"F:\fepc\ETS\localdata\ETS.db");
+        if real_path.exists() {
+            state.ets_local_db_path = Some(real_path.to_string_lossy().to_string());
+            state.scan_ets_local_db();
+            assert!(state.ets_local_scanned);
+            assert!(!state.ets_local_accounts.is_empty());
+        }
     }
 }
 

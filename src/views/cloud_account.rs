@@ -15,6 +15,7 @@ use crate::models::UserSession;
 use crate::state::AppState;
 use crate::views::{
     accent_action_btn, action_btn, choice_btn, danger_action_btn, render_header, responsive_flow,
+    truncate_middle,
 };
 
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
@@ -686,6 +687,10 @@ pub fn start_async_la_login(
 }
 
 fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
+    if !state.ets_local_scanned && !state.ets_local_scanning {
+        state.scan_ets_local_db();
+    }
+
     ui.card("模式说明：官方直连查题模式", "直接连接官方 ETS100 服务，无需注册或登录 LA 账号", |ui| {
         ui.label(RichText::new("ℹ 本模式完全免费开放：").strong().color(Color32::from_rgb(0, 180, 255)));
         ui.label("• 可直接使用您本人的 ETS100 手机号与密码登录，安全直连官方服务器；");
@@ -696,15 +701,49 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
 
     if state.session.is_logged_in {
         ui.card("ETS100 官方直连会话", "已建立直连会话", |ui| {
-            ui.label(RichText::new(format!("👤 用户姓名: {}", if state.session.user_name.is_empty() { "学生" } else { &state.session.user_name })).strong().size(16.0));
+            let user_name = if state.session.user_name.is_empty() { "学生" } else { &state.session.user_name };
+            ui.label(RichText::new(format!("👤 用户姓名: {user_name}")).strong().size(16.0));
             ui.label(format!("📱 登录手机号: {}", state.session.phone));
             ui.label(format!("💻 绑定设备码: {}", state.session.device_code));
             ui.label(format!("🆔 家长/学生关联 ID: {}", state.session.parent_account_id));
             ui.label(RichText::new("✔ 会话令牌有效").color(Color32::from_rgb(76, 175, 80)));
 
+            // 若当前会话匹配本地账号，展示学校班级和学生卡信息
+            if let Some(acc) = state.ets_local_accounts.iter().find(|a| {
+                a.account == state.session.phone
+                    || (!a.token.is_empty() && a.token == state.session.token)
+            }) {
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(RichText::new("💾 关联本地 ETS 档案:").strong().color(Color32::from_rgb(0, 180, 255)));
+                if !acc.student_card_no.is_empty() {
+                    ui.label(format!("💳 学生卡号: {}", acc.student_card_no));
+                }
+                if !acc.school_name.is_empty() || !acc.class_name.is_empty() {
+                    ui.label(format!("🏫 就读学校: {} · {}班", acc.school_name, acc.class_name));
+                }
+                if !acc.teacher_name.is_empty() {
+                    ui.label(format!("👨‍🏫 任课老师: {}", acc.teacher_name));
+                }
+                if !acc.expiry_time.is_empty() {
+                    ui.label(format!("📅 有效期至: {}", acc.expiry_time));
+                }
+            }
+
             ui.separator();
 
             responsive_flow(ui, |ui| {
+                let refresh_label = if state.homework_refreshing {
+                    "⏳ 正在刷新云端作业..."
+                } else {
+                    "🔄 刷新云端作业"
+                };
+                if action_btn(ui, refresh_label).clicked() && !state.homework_refreshing {
+                    state.refresh_cloud_homework();
+                    state.notification = Some(("正在刷新云端作业列表...".to_string(), InfoBarKind::Informational));
+                }
+
                 if danger_action_btn(ui, "🚪 退出当前登录").clicked() {
                     CloudClient::clear_session();
                     state.session = Default::default();
@@ -715,6 +754,135 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
         });
         return;
     }
+
+    // 未登录官方直连时，在顶部渲染本地 ETS.db 检测卡片
+    ui.card("💾 检测到本地 e听说 历史账号", "读取自本地客户端 SQLite 数据库，支持零顶号免密直接接管或自动填充密码", |ui| {
+        if state.ets_local_accounts.is_empty() {
+            ui.label(RichText::new("未在常见路径检测到 ETS.db 数据库").color(Color32::from_gray(160)));
+            ui.add_space(4.0);
+            responsive_flow(ui, |ui| {
+                if action_btn(ui, "📂 选择本地 ETS.db 文件").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("SQLite 数据库 (*.db)", &["db"])
+                        .pick_file()
+                    {
+                        state.ets_local_db_path = Some(path.to_string_lossy().to_string());
+                        state.scan_ets_local_db();
+                    }
+                }
+
+                if action_btn(ui, "🔄 重新检测").clicked() {
+                    state.ets_local_db_path = None;
+                    state.scan_ets_local_db();
+                }
+            });
+        } else {
+            // 顶部展示数据库文件路径小字；提供 [ 📂 更换路径 ] 和 [ 🔄 刷新 ] 按钮
+            responsive_flow(ui, |ui| {
+                if let Some(ref db_path) = state.ets_local_db_path {
+                    let display_path = truncate_middle(db_path, 45);
+                    ui.label(RichText::new(format!("📁 数据库: {display_path}")).size(12.5).color(Color32::from_gray(140)))
+                        .on_hover_text(db_path);
+                }
+                if action_btn(ui, "📂 更换路径").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("SQLite 数据库 (*.db)", &["db"])
+                        .pick_file()
+                    {
+                        state.ets_local_db_path = Some(path.to_string_lossy().to_string());
+                        state.scan_ets_local_db();
+                    }
+                }
+                if action_btn(ui, "🔄 刷新").clicked() {
+                    state.scan_ets_local_db();
+                }
+            });
+
+            ui.add_space(6.0);
+
+            let acc_count = state.ets_local_accounts.len();
+            let mut apply_idx = None;
+            let mut fill_idx = None;
+
+            for (idx, acc) in state.ets_local_accounts.iter().enumerate() {
+                ui.add_space(4.0);
+                responsive_flow(ui, |ui| {
+                    let name_str = if acc.name.is_empty() { "学生" } else { &acc.name };
+                    ui.label(RichText::new(format!("👤 {name_str} ({})", acc.account)).strong().size(14.5));
+
+                    if !acc.student_card_no.is_empty() {
+                        ui.label(
+                            RichText::new(format!(" [卡号: {}] ", acc.student_card_no))
+                                .size(12.0)
+                                .color(Color32::from_rgb(0, 188, 212)),
+                        );
+                    }
+                    if acc.password_plain.is_some() {
+                        ui.label(
+                            RichText::new("🔑 已解密密码")
+                                .size(11.5)
+                                .color(Color32::from_rgb(76, 175, 80)),
+                        );
+                    }
+                });
+
+                let mut details = Vec::new();
+                let school_class = if !acc.school_name.is_empty() && !acc.class_name.is_empty() {
+                    format!("🏫 {} · {}班", acc.school_name, acc.class_name)
+                } else if !acc.school_name.is_empty() {
+                    format!("🏫 {}", acc.school_name)
+                } else if !acc.class_name.is_empty() {
+                    format!("🏫 {}班", acc.class_name)
+                } else {
+                    String::new()
+                };
+                if !school_class.is_empty() {
+                    details.push(school_class);
+                }
+                if !acc.teacher_name.is_empty() {
+                    details.push(format!("👨‍🏫 任课老师: {}", acc.teacher_name));
+                }
+                if !acc.expiry_time.is_empty() {
+                    details.push(format!("📅 有效期至: {}", acc.expiry_time));
+                }
+
+                if !details.is_empty() {
+                    ui.label(
+                        RichText::new(details.join("  |  "))
+                            .size(12.0)
+                            .color(Color32::from_gray(160)),
+                    );
+                }
+
+                ui.add_space(2.0);
+
+                responsive_flow(ui, |ui| {
+                    let green = Color32::from_rgb(16, 124, 65);
+                    if accent_action_btn(ui, "⚡ 免密直接接管 (不顶号)", Some(green)).clicked() {
+                        apply_idx = Some(idx);
+                    }
+                    if action_btn(ui, "🔑 密码一键登录 (全新Token)").clicked() {
+                        fill_idx = Some(idx);
+                    }
+                });
+
+                if idx + 1 < acc_count {
+                    ui.separator();
+                }
+            }
+
+            if let Some(idx) = apply_idx {
+                if let Err(e) = state.apply_ets_local_direct_session(idx) {
+                    state.notification = Some((format!("直接接管失败: {e}"), InfoBarKind::Error));
+                }
+            }
+            if let Some(idx) = fill_idx {
+                state.fill_ets_local_login_form(idx);
+            }
+        }
+    });
+
+    ui.add_space(8.0);
 
     // 未登录时显示官方直连登录表单
     ui.card("ETS100 官方账号密码直连", "直接向官方接口发起鉴权登录", |ui| {

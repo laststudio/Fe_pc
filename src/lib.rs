@@ -16,3 +16,4 @@ pub mod workflow;
 pub mod telemetry;
 pub mod themida_sdk;
 pub mod eula;
+pub mod ets_local_db;

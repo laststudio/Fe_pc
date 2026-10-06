@@ -26,6 +26,20 @@ fn switch_category(state: &mut AppState, cat: HomeworkCategory) {
 
 fn refresh_current_category(state: &mut AppState) {
     if !state.session.is_logged_in {
+        // 如果未登录且本地存在 ETS.db，自动尝试读取离线作业列表
+        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+            if let Ok(cached) = crate::ets_local_db::read_cached_homeworks(&db_path) {
+                if !cached.is_empty() {
+                    let count = cached.len();
+                    state.homework_items = cached;
+                    state.notification = Some((
+                        format!("📂 已自动加载本地离线作业列表 ({} 项)", count),
+                        InfoBarKind::Success,
+                    ));
+                    return;
+                }
+            }
+        }
         state.notification = Some(("请先在【云端账号】页面登录 ETS 账号".to_string(), InfoBarKind::Warning));
         return;
     }
@@ -167,11 +181,17 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     if hw.source == HomeworkSource::Cloud {
                         !hw.is_pk_or_vocab()
                     } else {
-                        // 未登录云端账号且云端列表为空时，本地作业在当前分类下可见
-                        !state.session.is_logged_in && state.homework_items.is_empty()
+                        // 本地作业或离线缓存作业在当前分类下可见
+                        !hw.is_pk_or_vocab()
                     }
                 }
-                HomeworkCategory::History => hw.source == HomeworkSource::Cloud && !hw.is_pk_or_vocab(),
+                HomeworkCategory::History => {
+                    if hw.source == HomeworkSource::Cloud {
+                        !hw.is_pk_or_vocab()
+                    } else {
+                        hw.status.contains("已完成")
+                    }
+                }
                 HomeworkCategory::VocabPk => hw.source == HomeworkSource::Cloud && hw.is_pk_or_vocab(),
                 HomeworkCategory::Local => hw.source == HomeworkSource::Local,
             };
@@ -194,6 +214,8 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         HomeworkCategory::Current => {
             if !state.session.is_logged_in && state.homework_items.is_empty() {
                 "当前试卷列表 (离线/本地模式)"
+            } else if state.homework_items.iter().any(|h| h.status.contains("离线缓存")) {
+                "当前作业列表 (本地 ETS.db 离线缓存)"
             } else {
                 "当前日常作业列表"
             }
@@ -218,6 +240,27 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             });
             return;
         }
+
+        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+            ui.card("📂 本地离线作业库", "检测到系统包含 ETS.db 离线作业缓存", |ui| {
+                ui.label("当前分类暂无作业。系统检测到本地已安装 e听说 客户端并存在离线作业缓存。");
+                ui.add_space(6.0);
+                responsive_flow(ui, |ui| {
+                    if accent_action_btn(ui, "📂 载入本地离线作业 (5 项)", None).clicked() {
+                        if let Ok(cached) = crate::ets_local_db::read_cached_homeworks(&db_path) {
+                            let count = cached.len();
+                            state.homework_items = cached;
+                            state.notification = Some((
+                                format!("📂 已自动加载本地离线作业列表 ({} 项)", count),
+                                InfoBarKind::Success,
+                            ));
+                        }
+                    }
+                });
+            });
+            return;
+        }
+
         ui.card("暂无匹配作业", "未找到符合当前筛选条件的试卷", |ui| {
             ui.label("当前分类或筛选条件下暂无作业。您可以点击上方的【🔄 刷新列表】拉取最新列表，或切换不同的分类标签。");
             if !state.session.is_logged_in {
@@ -232,13 +275,28 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         return;
     }
 
+    // 若当前展示的列表中包含来自 ETS.db 的离线缓存作业，展示顶部醒目提示
+    let has_offline = display_items.iter().any(|h| h.status.contains("离线缓存"));
+    if has_offline {
+        ui.card("📂 已自动加载本地离线作业列表", "检测到未连接云端或云端列表为空，已为您无缝加载本地 ETS.db 离线作业", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("⚡ 本地离线模式:").strong().color(Color32::from_rgb(0, 180, 255)));
+                ui.label(RichText::new(format!("共 {} 项离线作业已就绪，已与本地数据库无缝融合，支持极速秒出答案与离线做题", display_items.len())).color(Color32::from_gray(200)));
+            });
+        });
+        ui.add_space(6.0);
+    }
+
     // 自然卡片排版 (操作按钮使用 horizontal_wrapped 防止任何屏幕溢出)
     for hw in &display_items {
         let is_cloud = hw.source == HomeworkSource::Cloud;
         let is_pk = hw.is_pk_or_vocab();
+        let is_offline_cache = hw.status.contains("离线缓存");
 
         let source_badge = if is_pk {
             "🔥 词汇PK"
+        } else if is_offline_cache {
+            "📂 离线缓存"
         } else if is_cloud {
             "☁️ 云端"
         } else {
@@ -270,29 +328,60 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             responsive_flow(ui, |ui| {
                 if accent_action_btn(ui, "📖 查看答案", None).clicked() {
                     state.report_feature_usage("answer_parser");
-                    state.selected_homework = Some(hw.clone());
+                    let mut hw_to_select = hw.clone();
                     state.answer_view_mode = AnswerViewMode::Detailed;
+                    state.local_ets_answer_matched = false;
                     // 如果是云端作业且未下载解析，触发下载 / 回退解析
-                    if is_cloud && !hw.is_parsed() {
+                    if is_cloud && !hw_to_select.is_parsed() {
                         match CloudClient::download_and_parse_homework(&state.session, hw) {
                             Ok(parsed_hw) => {
-                                state.selected_homework = Some(parsed_hw);
+                                hw_to_select = parsed_hw;
                             }
                             Err(err) => {
                                 state.notification = Some((format!("解析试卷失败: {}", err), InfoBarKind::Error));
                             }
                         }
                     }
+                    // 若未解析出题目或题目答案为空，自动尝试本地 ETS.db 秒速匹配
+                    let needs_local = !hw_to_select.is_parsed() || hw_to_select.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty()));
+                    if needs_local {
+                        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+                            if let Some(local_ans) = crate::ets_local_db::match_paper_answers(&db_path, &hw_to_select.id, &hw_to_select.name, &hw_to_select.resource_id) {
+                                local_ans.apply_to_homework(&mut hw_to_select);
+                                state.local_ets_answer_matched = true;
+                                state.notification = Some((
+                                    "⚡ 已命中本地 e听说 极速答案库（客观题与填空题 0ms 秒出）".to_string(),
+                                    InfoBarKind::Success,
+                                ));
+                            }
+                        }
+                    }
+                    state.selected_homework = Some(hw_to_select);
                 }
 
                 if action_btn(ui, "⚡ 极简答案").clicked() {
                     state.report_feature_usage("answer_parser");
-                    state.selected_homework = Some(hw.clone());
+                    let mut hw_to_select = hw.clone();
                     state.answer_view_mode = AnswerViewMode::Concise;
-                    if is_cloud && !hw.is_parsed()
+                    state.local_ets_answer_matched = false;
+                    if is_cloud && !hw_to_select.is_parsed()
                         && let Ok(parsed_hw) = CloudClient::download_and_parse_homework(&state.session, hw) {
-                            state.selected_homework = Some(parsed_hw);
+                            hw_to_select = parsed_hw;
                         }
+                    let needs_local = !hw_to_select.is_parsed() || hw_to_select.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty()));
+                    if needs_local {
+                        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+                            if let Some(local_ans) = crate::ets_local_db::match_paper_answers(&db_path, &hw_to_select.id, &hw_to_select.name, &hw_to_select.resource_id) {
+                                local_ans.apply_to_homework(&mut hw_to_select);
+                                state.local_ets_answer_matched = true;
+                                state.notification = Some((
+                                    "⚡ 已命中本地 e听说 极速答案库（客观题与填空题 0ms 秒出）".to_string(),
+                                    InfoBarKind::Success,
+                                ));
+                            }
+                        }
+                    }
+                    state.selected_homework = Some(hw_to_select);
                 }
 
                 if action_btn(ui, "🚀 自动做题").clicked() {
@@ -302,11 +391,18 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
                 if subtle_action_btn(ui, "📋 复制全部答案").clicked() {
                     state.report_feature_usage("copy_export");
-                    let hw_to_copy = if is_cloud && !hw.is_parsed() {
+                    let mut hw_to_copy = if is_cloud && !hw.is_parsed() {
                         CloudClient::download_and_parse_homework(&state.session, hw).unwrap_or_else(|_| hw.clone())
                     } else {
                         hw.clone()
                     };
+                    if !hw_to_copy.is_parsed() || hw_to_copy.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty())) {
+                        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
+                            if let Some(local_ans) = crate::ets_local_db::match_paper_answers(&db_path, &hw_to_copy.id, &hw_to_copy.name, &hw_to_copy.resource_id) {
+                                local_ans.apply_to_homework(&mut hw_to_copy);
+                            }
+                        }
+                    }
                     let text = Exporter::format_concise_answers(&hw_to_copy);
                     if Exporter::copy_text_to_clipboard(&text).is_ok() {
                         state.notification = Some(("已复制极简答案到剪贴板".to_string(), InfoBarKind::Success));
