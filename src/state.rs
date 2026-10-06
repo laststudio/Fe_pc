@@ -299,7 +299,7 @@ impl AppState {
         let _ = tx.send(SecureWorkerMessage::new(event));
     }
 
-    /// 轮询并消费跨线程安全异步 Worker 事件 (Tier 3: themida_tiger_white! 保护，严格单入口单出口)
+    /// 轮询并消费跨线程安全异步 Worker 事件 (依赖 Tier 3: calculate_mask 保护校验)
     pub fn poll_async_events(&mut self) {
         let mut pending = Vec::new();
         while let Ok(msg) = self.async_worker_rx.try_recv() {

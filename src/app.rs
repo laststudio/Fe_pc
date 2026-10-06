@@ -728,6 +728,51 @@ impl eframe::App for FepcApp {
     }
 }
 
+#[inline(never)]
+fn compute_toast_animation(
+    now: f64,
+    created_at: f64,
+    dismiss_start: f64,
+    is_dismissing: bool,
+) -> (f32, bool, bool, f32) {
+    crate::themida_tiger_white!({
+        let factor: f32;
+        let clear: bool;
+        let animating: bool;
+        if is_dismissing {
+            let elapsed = (now - dismiss_start) as f32;
+            let duration = 0.22f32;
+            if elapsed >= duration {
+                factor = 0.0;
+                clear = true;
+                animating = false;
+            } else {
+                let t = (elapsed / duration).clamp(0.0, 1.0);
+                let inv = 1.0 - t;
+                factor = inv * inv;
+                clear = false;
+                animating = true;
+            }
+        } else {
+            let elapsed = (now - created_at) as f32;
+            let duration = 0.22f32;
+            if elapsed < duration {
+                let t = (elapsed / duration).clamp(0.0, 1.0);
+                let inv = 1.0 - t;
+                factor = 1.0 - inv * inv * inv;
+                clear = false;
+                animating = true;
+            } else {
+                factor = 1.0;
+                clear = false;
+                animating = false;
+            }
+        }
+        let off_x = (1.0 - factor) * 48.0;
+        (factor, clear, animating, off_x)
+    })
+}
+
 impl FepcApp {
     /// Win11 原生风格右上角悬浮 Toast 通知渲染引擎 (绝对定位，避免推挤页面主内容导致颠簸)
     pub fn render_floating_toast(ctx: &egui::Context, state: &mut AppState) {
@@ -762,42 +807,9 @@ impl FepcApp {
         let created_at = state.notification_created_at.unwrap_or(current_time);
         let now = current_time;
 
-        // 动效插值因子与生命周期状态安全运算
-        let (anim_factor, should_clear, is_animating) = {
-            let factor: f32;
-            let clear: bool;
-            let animating: bool;
-            if is_dismissing {
-                let elapsed = (now - dismiss_start) as f32;
-                let duration = 0.22f32;
-                if elapsed >= duration {
-                    factor = 0.0;
-                    clear = true;
-                    animating = false;
-                } else {
-                    let t = (elapsed / duration).clamp(0.0, 1.0);
-                    let inv = 1.0 - t;
-                    factor = inv * inv;
-                    clear = false;
-                    animating = true;
-                }
-            } else {
-                let elapsed = (now - created_at) as f32;
-                let duration = 0.22f32;
-                if elapsed < duration {
-                    let t = (elapsed / duration).clamp(0.0, 1.0);
-                    let inv = 1.0 - t;
-                    factor = 1.0 - inv * inv * inv;
-                    clear = false;
-                    animating = true;
-                } else {
-                    factor = 1.0;
-                    clear = false;
-                    animating = false;
-                }
-            }
-            (factor, clear, animating)
-        };
+        // 动效插值因子与生命周期状态安全运算 (Tier 3: TIGER64 White 保护)
+        let (anim_factor, should_clear, is_animating, offset_x) =
+            compute_toast_animation(now, created_at, dismiss_start, is_dismissing);
 
         if is_animating {
             ctx.request_repaint();
@@ -893,8 +905,9 @@ impl FepcApp {
             })
             .inner_margin(egui::Margin::symmetric(14, 10));
 
-        let offset_x = (1.0 - anim_factor) * 36.0;
-        let anchor_pos = egui::vec2(-24.0 + offset_x, 42.0);
+        // 标准 Windows 11 Toast 悬浮卡片固定宽度与右上角贴边间距 (距右边缘 16px，严禁留空过大)
+        const TOAST_WIDTH: f32 = 320.0;
+        let anchor_pos = egui::vec2(-16.0 + offset_x, 42.0);
 
         let mut close_clicked = false;
         let mut is_hovered = false;
@@ -904,15 +917,17 @@ impl FepcApp {
             .anchor(egui::Align2::RIGHT_TOP, anchor_pos)
             .interactable(true)
             .show(ctx, |ui| {
-                ui.set_max_width(360.0);
-                ui.set_min_width(280.0);
+                ui.set_width(TOAST_WIDTH);
 
                 let frame_resp = frame.show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+
                     ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         ui.label(RichText::new(icon_str).size(16.0).color(icon_color).strong());
 
-                        let content_w = (ui.available_width() - 24.0).max(120.0);
+                        // 中间文本区域撑满剩余空间，关闭按钮精确固定在卡片最右侧
+                        let content_w = (ui.available_width() - 26.0).max(100.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(content_w, 0.0),
                             egui::Layout::top_down(egui::Align::Min),

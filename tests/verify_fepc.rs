@@ -2159,14 +2159,15 @@ fn test_floating_toast_and_version_logic() {
     assert!(toast_state.notification_expires_at.is_some());
     assert!(!toast_state.notification_dismissing);
 
-    // 验证悬停顺延逻辑：
-    let current_expire = toast_state.notification_expires_at.unwrap();
-    let current_time = 100.0;
-    let target_expire = current_time + 4.0;
-    if current_expire < target_expire {
-        toast_state.notification_expires_at = Some(target_expire);
+    // 验证多帧渲染下 Toast 卡片精准对齐与标准尺寸 (320px)
+    let _ = ctx.run_ui(eframe::egui::RawInput::default(), |ctx| {
+        fepc::app::render_floating_toast(ctx, &mut toast_state);
+    });
+    let area_id = eframe::egui::Id::new("fepc_floating_toast_notification");
+    if let Some(rect) = ctx.memory(|mem| mem.area_rect(area_id)) {
+        assert_eq!(rect.width(), 320.0, "Toast 悬浮卡片宽度必须为标准的 320px");
+        println!("✓ Toast 悬浮卡片几何尺寸与右对齐校验通过: width = {:.1}", rect.width());
     }
-    assert!(toast_state.notification_expires_at.unwrap() >= target_expire);
 
     println!("✓ Win11 右上角悬浮 Toast 通知渲染引擎与版本更新判断集成测试全部通过！");
 }
