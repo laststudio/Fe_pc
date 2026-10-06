@@ -531,10 +531,11 @@ impl CloudClient {
         question_counter: &mut usize,
     ) -> Option<ParsedSection> {
         crate::themida_tiger_white!({
-            let content_file = part_dir.join("content.json");
-            if !content_file.exists() {
-                return None;
-            }
+            (|| -> Option<ParsedSection> {
+                let content_file = part_dir.join("content.json");
+                if !content_file.exists() {
+                    return None;
+                }
             let c_str = fs::read_to_string(&content_file).ok()?;
             let content_val = serde_json::from_str::<Value>(&c_str).ok()?;
 
@@ -683,7 +684,8 @@ impl CloudClient {
                 title: friendly_title,
                 questions,
             })
-        })
+        })()
+    })
     }
 
     /// 底层调用 ETS100 官方签名接口

@@ -18,12 +18,13 @@ use crate::views::{
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     render_header(ui, "本地试卷扫描", "直接读取 PC 端官方 e听说客户端下载在本地的作业与试卷数据");
 
-    // 检测本地环境
+    // 检测本地环境 (首次进入若为空则执行轻量嗅探)
     if state.local_ets_dirs.is_empty() {
         state.local_ets_dirs = LocalScanner::find_ets_local_dirs();
-        if let Some(first) = state.local_ets_dirs.first() {
+        if let Some(first) = state.local_ets_dirs.first().cloned() {
             state.selected_local_dir = Some(first.clone());
-            state.local_items = LocalScanner::scan_homeworks(first);
+            state.refresh_selected_local_metadata();
+            state.local_items = LocalScanner::scan_homeworks_lazy(&first);
         }
     }
 
@@ -33,7 +34,8 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         } else {
             ui.label(RichText::new(format!("✔ 已成功检测到 {} 个本地客户端数据目录", state.local_ets_dirs.len())).color(Color32::from_rgb(76, 175, 80)).strong());
             
-            for dir in &state.local_ets_dirs {
+            let detected_dirs = state.local_ets_dirs.clone();
+            for dir in &detected_dirs {
                 let is_selected = state.selected_local_dir.as_ref() == Some(dir);
                 let dir_str = dir.to_string_lossy().to_string();
                 let short_dir = truncate_middle(&dir_str, 42);
@@ -47,19 +49,19 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     let btn_resp = choice_btn(ui, &label, is_selected, None);
                     if btn_resp.on_hover_text(&dir_str).clicked() {
                         state.selected_local_dir = Some(dir.clone());
-                        state.local_items = LocalScanner::scan_homeworks(dir);
-                        state.notification = Some((format!("已重新扫描本地目录: {}", dir_str), InfoBarKind::Success));
+                        state.refresh_selected_local_metadata();
+                        state.local_items = LocalScanner::scan_homeworks_lazy(dir);
+                        state.notification = Some((format!("已切换至本地目录: {}", dir_str), InfoBarKind::Success));
                     }
                 });
 
                 if is_selected {
-                    // 读取硬件设备码与已保存账号
-                    if let Some(dev_code) = LocalScanner::read_local_device_code(dir) {
+                    // 读取硬件设备码与已保存账号 (直接使用 AppState 单次读取缓存，杜绝每秒 60 次重复进入 Themida 虚拟机导致堆损坏)
+                    if let Some(ref dev_code) = state.local_device_code {
                         ui.label(format!("  💻 本机硬件设备码: {}", dev_code));
                     }
-                    let accounts = LocalScanner::read_local_accounts(dir);
-                    if !accounts.is_empty() {
-                        let acc_summaries: Vec<String> = accounts
+                    if !state.local_accounts.is_empty() {
+                        let acc_summaries: Vec<String> = state.local_accounts
                             .iter()
                             .map(|a| {
                                 if a.name.is_empty() {
@@ -69,7 +71,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                                 }
                             })
                             .collect();
-                        ui.label(format!("  👤 已登录账号 ({} 个): {}", accounts.len(), acc_summaries.join("、 ")));
+                        ui.label(format!("  👤 已登录账号 ({} 个): {}", state.local_accounts.len(), acc_summaries.join("、 ")));
                     }
                 }
             }
@@ -80,18 +82,20 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         responsive_flow(ui, |ui| {
             if action_btn(ui, "🔄 重新扫描默认路径").clicked() {
                 state.local_ets_dirs = LocalScanner::find_ets_local_dirs();
-                if let Some(first) = state.local_ets_dirs.first() {
+                if let Some(first) = state.local_ets_dirs.first().cloned() {
                     state.selected_local_dir = Some(first.clone());
-                    state.local_items = LocalScanner::scan_homeworks(first);
-                    state.notification = Some((format!("扫描完成，发现 {} 份本地试卷", state.local_items.len()), InfoBarKind::Success));
+                    state.refresh_selected_local_metadata();
+                    state.local_items = LocalScanner::scan_homeworks_lazy(&first);
+                    state.notification = Some((format!("扫描完成，发现 {} 份本地试卷 (已建立极速索引)", state.local_items.len()), InfoBarKind::Success));
                 }
             }
 
             if accent_action_btn(ui, "📂 选择其他自定义目录", None).clicked()
                 && let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     state.selected_local_dir = Some(folder.clone());
-                    state.local_items = LocalScanner::scan_homeworks(&folder);
-                    state.notification = Some((format!("已扫描自定义目录，发现 {} 份作业", state.local_items.len()), InfoBarKind::Success));
+                    state.refresh_selected_local_metadata();
+                    state.local_items = LocalScanner::scan_homeworks_lazy(&folder);
+                    state.notification = Some((format!("已扫描自定义目录，发现 {} 份作业 (已建立极速索引)", state.local_items.len()), InfoBarKind::Success));
                 }
         });
     });
@@ -99,7 +103,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     ui.add_space(12.0);
 
     // 展示扫描出的本地试卷
-    ui.heading(RichText::new(format!("本地试卷列表 (共 {} 份)", state.local_items.len())).strong().size(18.0));
+    ui.heading(RichText::new(format!("本地试卷列表 (共 {} 份 · 懒解析索引)", state.local_items.len())).strong().size(18.0));
     ui.add_space(6.0);
 
     if state.local_items.is_empty() {
@@ -109,30 +113,46 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         return;
     }
 
-    // 自然排版卡片列表，不添加受限的内部 ScrollArea，跟随主窗口统一平滑滚动
-    for hw in &state.local_items {
-        let hw_clone = hw.clone();
+    // 自然排版卡片列表，跟随主窗口统一平滑滚动
+    for i in 0..state.local_items.len() {
+        let hw_id = state.local_items[i].id.clone();
+        let hw_name = state.local_items[i].name.clone();
+        let q_count = state.local_items[i].question_count;
+        let is_parsed = state.local_items[i].is_parsed();
+        let sec_count = state.local_items[i].sections.len();
+
+        let status_desc = if is_parsed {
+            format!("✔ 全量解析就绪 ({} 题型组)", sec_count)
+        } else {
+            "⚡ 极速索引就绪 (点击按需秒级解析)".to_string()
+        };
+
         let subtitle = format!(
-            "本地 ID: {}  |  题目数: {} 题  |  题型组: {} 组",
-            hw.id, hw.question_count, hw.sections.len()
+            "本地 ID: {}  |  题目数: {} 题  |  {}",
+            hw_id, q_count, status_desc
         );
 
-        ui.card(&hw.name, &subtitle, |ui| {
+        ui.card(&hw_name, &subtitle, |ui| {
             responsive_flow(ui, |ui| {
                 if accent_action_btn(ui, "📖 查看完整答案", None).clicked() {
-                    state.selected_homework = Some(hw_clone.clone());
-                    state.answer_view_mode = AnswerViewMode::Detailed;
-                    state.current_tab = NavTab::HomeworkList;
+                    if let Some(parsed) = state.ensure_local_homework_parsed(&hw_id) {
+                        state.selected_homework = Some(parsed.clone());
+                        state.answer_view_mode = AnswerViewMode::Detailed;
+                        state.current_tab = NavTab::HomeworkList;
+                    }
                 }
 
                 if action_btn(ui, "⚡ 极简速查").clicked() {
-                    state.selected_homework = Some(hw_clone.clone());
-                    state.answer_view_mode = AnswerViewMode::Concise;
-                    state.current_tab = NavTab::HomeworkList;
+                    if let Some(parsed) = state.ensure_local_homework_parsed(&hw_id) {
+                        state.selected_homework = Some(parsed.clone());
+                        state.answer_view_mode = AnswerViewMode::Concise;
+                        state.current_tab = NavTab::HomeworkList;
+                    }
                 }
 
                 if action_btn(ui, "🚀 自动做题").clicked() {
-                    state.auto_selected_hw_id = Some(hw_clone.id.clone());
+                    let _ = state.ensure_local_homework_parsed(&hw_id);
+                    state.auto_selected_hw_id = Some(hw_id.clone());
                     state.current_tab = NavTab::AutoComplete;
                 }
             });

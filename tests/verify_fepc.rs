@@ -56,6 +56,58 @@ fn test_local_directory_discovery_and_scan() {
 }
 
 #[test]
+fn test_local_lazy_scan_and_on_demand_resolution() {
+    let dirs = LocalScanner::find_ets_local_dirs();
+    assert!(!dirs.is_empty(), "Should discover at least one ETS local directory in APPDATA");
+
+    let target_dir = &dirs[0];
+
+    // 1. 验证极速懒扫描 (Lazy Indexing)
+    let start_t = std::time::Instant::now();
+    let mut lazy_hws = LocalScanner::scan_homeworks_lazy(target_dir);
+    let elapsed = start_t.elapsed();
+    println!("Lazy scan finished in {:?} with {} items", elapsed, lazy_hws.len());
+    assert!(!lazy_hws.is_empty(), "Lazy scan should discover local homeworks");
+
+    // 验证所有作业处于未解析状态，但基础元信息就绪
+    for hw in &lazy_hws {
+        assert!(!hw.id.is_empty());
+        assert!(!hw.name.is_empty());
+        assert!(hw.question_count > 0, "Question count should be indexed");
+        assert!(!hw.is_parsed(), "Homework should initially be unparsed in lazy mode");
+        assert!(hw.sections.is_empty(), "Sections should be empty in lazy mode");
+    }
+
+    // 2. 验证按需全量解析 (On-Demand Full Resolution)
+    let target_hw = &mut lazy_hws[0];
+    let hw_id = target_hw.id.clone();
+    assert!(!target_hw.is_parsed());
+
+    let parse_ok = LocalScanner::ensure_homework_parsed(target_hw);
+    assert!(parse_ok, "ensure_homework_parsed should succeed for valid homework");
+    assert!(target_hw.is_parsed(), "Homework should now be marked as parsed");
+    assert!(!target_hw.sections.is_empty(), "Sections should now be populated");
+
+    // 3. 验证幂等性
+    assert!(LocalScanner::ensure_homework_parsed(target_hw), "Subsequent ensure should return true immediately");
+
+    // 4. 验证 AppState 状态联动与缓存
+    let mut state = fepc::state::AppState {
+        local_ets_dirs: dirs.clone(),
+        selected_local_dir: Some(target_dir.clone()),
+        local_items: LocalScanner::scan_homeworks_lazy(target_dir),
+        ..Default::default()
+    };
+    state.refresh_selected_local_metadata();
+    assert!(state.local_device_code.is_some() || !state.local_accounts.is_empty(), "Metadata should be cached");
+
+    // 通过 state 方法按需解析
+    let resolved = state.ensure_local_homework_parsed(&hw_id);
+    assert!(resolved.is_some());
+    assert!(resolved.unwrap().is_parsed());
+}
+
+#[test]
 fn test_render_ui() {
     let ctx = eframe::egui::Context::default();
     let mut state = fepc::state::AppState {

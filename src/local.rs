@@ -68,35 +68,44 @@ impl LocalScanner {
     /// 从指定的本地 ETS 目录中解析 userinfo 保存的账号信息
     #[inline(never)]
     pub fn read_local_accounts(ets_dir: &Path) -> Vec<LocalAccountInfo> {
-        let mut accounts = Vec::new();
         let userinfo_path = ets_dir.join("userinfo");
         let b64 = match fs::read_to_string(&userinfo_path) {
             Ok(s) => s,
-            Err(_) => return accounts,
+            Err(_) => return Vec::new(),
         };
 
-        crate::themida_tiger_white!({
-            if let Ok(bytes) = BASE64.decode(b64.trim()) {
-                // ETS PC 客户端以 GBK/CP936 编码写入 userinfo，直接按 UTF-8 解码会导致中文学生姓名乱码
-                let (cow, _, _) = encoding_rs::GBK.decode(&bytes);
-                let json_str = cow.as_ref();
-                if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json_str) {
-                    for item in items {
-                        let account = item.get("Account").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let token = item.get("Token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let cur_res_id = item.get("CurResItemID").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        if !account.is_empty() {
-                            accounts.push(LocalAccountInfo {
-                                account,
-                                name,
-                                token,
-                                cur_res_id,
-                            });
-                        }
-                    }
-                }
+        let bytes = match BASE64.decode(b64.trim()) {
+            Ok(b) => b,
+            Err(_) => return Vec::new(),
+        };
+        // ETS PC 客户端以 GBK/CP936 编码写入 userinfo，直接按 UTF-8 解码会导致中文学生姓名乱码
+        let (cow, _, _) = encoding_rs::GBK.decode(&bytes);
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(cow.as_ref()) else {
+            return Vec::new();
+        };
+
+        let mut parsed_raw: Vec<(String, String, String, String)> = Vec::with_capacity(items.len());
+        for item in &items {
+            let account = item.get("Account").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let token = item.get("Token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let cur_res_id = item.get("CurResItemID").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !account.is_empty() {
+                parsed_raw.push((account, name, token, cur_res_id));
             }
+        }
+
+        let mut accounts = Vec::with_capacity(parsed_raw.len());
+        crate::themida_tiger_white!({
+            for (acc, name, tok, res_id) in parsed_raw {
+                accounts.push(LocalAccountInfo {
+                    account: acc,
+                    name,
+                    token: tok,
+                    cur_res_id: res_id,
+                });
+            }
+            std::hint::black_box(&accounts);
         });
         accounts
     }
@@ -109,23 +118,143 @@ impl LocalScanner {
         let bytes = BASE64.decode(b64.trim()).ok()?;
         let entries: Vec<Value> = serde_json::from_slice(&bytes).ok()?;
 
-        let mut product_id = None;
+        let mut matched_idx: usize = usize::MAX;
         crate::themida_tiger_white!({
-            for entry in &entries {
-                let entry_name = entry.get("Entry").and_then(|v| v.as_str()).unwrap_or("");
-                if entry_name == "ProductID"
-                    && let Some(val) = entry.get("Value").and_then(|v| v.as_str())
-                    && !val.is_empty()
+            for (i, entry) in entries.iter().enumerate() {
+                if let Some(k) = entry.get("Entry").and_then(|v| v.as_str()) {
+                    if k == "ProductID" {
+                        if let Some(v) = entry.get("Value").and_then(|v| v.as_str()) {
+                            if !v.is_empty() {
+                                matched_idx = i;
+                            }
+                        }
+                    }
+                }
+            }
+            std::hint::black_box(matched_idx);
+        });
+
+        if matched_idx < entries.len() {
+            entries[matched_idx].get("Value").and_then(|v| v.as_str()).map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// 懒扫描模式：仅极速索引作业基本元信息 (ID、标题、题目数量)，不读取具体题目与答案 (Lazy Resolver)
+    pub fn scan_homeworks_lazy(ets_dir: &Path) -> Vec<HomeworkItem> {
+        let mut homeworks = Vec::new();
+        if let Ok(entries) = fs::read_dir(ets_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if name == "common"
+                    || name == "system"
+                    || name == "clear_cache"
+                    || name == "pc_xst_dict"
+                    || name.starts_with('.')
                 {
-                    product_id = Some(val.to_string());
+                    continue;
+                }
+
+                if let Some(hw) = Self::index_homework_folder_lazy(&path) {
+                    homeworks.push(hw);
+                }
+            }
+        }
+
+        // 按 ID 降序排序
+        homeworks.sort_by(|a, b| b.id.cmp(&a.id));
+        homeworks
+    }
+
+    /// 单个作业目录极速元数据索引 (耗时 < 1ms，绝不读取 content.json，绝不调用解析器)
+    pub fn index_homework_folder_lazy(folder: &Path) -> Option<HomeworkItem> {
+        let folder_name = folder.file_name()?.to_string_lossy().to_string();
+        let (id, mut title) = if let Some((id_part, name_part)) = folder_name.split_once('-') {
+            (id_part.to_string(), name_part.to_string())
+        } else {
+            (folder_name.clone(), format!("本地试卷 {}", folder_name))
+        };
+
+        // 尝试从 template/res.json 快速提取试卷名称
+        if let Ok(entries) = fs::read_dir(folder) {
+            for entry in entries.flatten() {
+                let sub_path = entry.path();
+                if sub_path.is_dir() && sub_path.file_name().unwrap_or_default().to_string_lossy().starts_with("template") {
+                    let res_json = sub_path.join("res.json");
+                    if res_json.exists()
+                        && let Ok(content) = fs::read_to_string(&res_json)
+                        && let Ok(val) = serde_json::from_str::<Value>(&content) {
+                            if let Some(paper_name) = val.get("name").and_then(|v| v.as_str())
+                                && !paper_name.is_empty() {
+                                    title = paper_name.to_string();
+                                }
+                        }
                     break;
                 }
             }
-        });
-        product_id
+        }
+
+        // 统计题目数：仅计算存在 content.json 的子目录个数，不读取文件内容
+        let mut question_count = 0usize;
+        if let Ok(entries) = fs::read_dir(folder) {
+            for entry in entries.flatten() {
+                let sub = entry.path();
+                if sub.is_dir() && sub.join("content.json").exists() {
+                    question_count += 1;
+                }
+            }
+        }
+
+        // 如果根本没有题目子目录，则不是作业目录，跳过
+        if question_count == 0 {
+            return None;
+        }
+
+        Some(HomeworkItem {
+            id,
+            name: title,
+            status: "已保存在本地".to_string(),
+            deadline: "".to_string(),
+            total_point: 30.0,
+            awarded_point: None,
+            question_count,
+            source: HomeworkSource::Local,
+            local_dir: Some(folder.to_string_lossy().to_string()),
+            resource_urls: Vec::new(),
+            sections: Vec::new(), // 懒加载标志：初始未解析
+            set_type: 0,
+            pk: 0,
+            resource_id: String::new(),
+        })
     }
 
-    /// 扫描 ETS 目录中所有作业文件夹并调用 resolver 引擎解析
+    /// 按需确保作业已被全量解析 (On-Demand Full Resolution)
+    pub fn ensure_homework_parsed(item: &mut HomeworkItem) -> bool {
+        if item.is_parsed() {
+            return true;
+        }
+        if let Some(ref dir_str) = item.local_dir {
+            let path = PathBuf::from(dir_str);
+            if let Some(parsed) = Self::parse_homework_folder(&path) {
+                item.sections = parsed.sections;
+                if !parsed.name.is_empty() {
+                    item.name = parsed.name;
+                }
+                if parsed.question_count > 0 {
+                    item.question_count = parsed.question_count;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 扫描 ETS 目录中所有作业文件夹并调用 resolver 引擎全量解析
     pub fn scan_homeworks(ets_dir: &Path) -> Vec<HomeworkItem> {
         let mut homeworks = Vec::new();
         if let Ok(entries) = fs::read_dir(ets_dir) {
@@ -156,8 +285,22 @@ impl LocalScanner {
         homeworks
     }
 
-    /// 解析单个本地作业目录 (如 42236 目录)
+    /// 解析单个本地作业目录 (带 catch_unwind 熔断隔离装甲，杜绝单作业异常崩溃)
     pub fn parse_homework_folder(folder: &Path) -> Option<HomeworkItem> {
+        let folder_buf = folder.to_path_buf();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::parse_homework_folder_impl(&folder_buf)
+        })) {
+            Ok(res) => res,
+            Err(err) => {
+                eprintln!("[-] [LocalScanner] Panic caught while parsing {:?}: {:?}", folder_buf, err);
+                None
+            }
+        }
+    }
+
+    /// 真实解析实现
+    fn parse_homework_folder_impl(folder: &Path) -> Option<HomeworkItem> {
         let folder_name = folder.file_name()?.to_string_lossy().to_string();
         let mut sections = Vec::new();
         let (id, mut title) = if let Some((id_part, name_part)) = folder_name.split_once('-') {

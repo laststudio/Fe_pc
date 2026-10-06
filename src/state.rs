@@ -34,6 +34,9 @@ pub struct AppState {
     pub selected_category: HomeworkCategory,
     pub local_ets_dirs: Vec<PathBuf>,
     pub selected_local_dir: Option<PathBuf>,
+    pub local_device_code: Option<String>,
+    pub local_accounts: Vec<crate::models::LocalAccountInfo>,
+    pub local_scanning: bool,
 
     // 主题、外观与页面转场动效
     pub theme_config: ThemeConfig,
@@ -132,6 +135,9 @@ impl Default for AppState {
             selected_category: HomeworkCategory::Current,
             local_ets_dirs: Vec::new(),
             selected_local_dir: None,
+            local_device_code: None,
+            local_accounts: Vec::new(),
+            local_scanning: false,
             theme_config: ThemeConfig::new(FluentTheme::Dark).with_animations(true).with_material_opacity(1.0),
             backdrop_kind: BackdropKind::None,
             nav_revision: 1,
@@ -212,6 +218,28 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// 刷新当前选中本地目录的静态元数据 (仅在目录变更/初次加载时调用 1 次，严禁在 UI 渲染死循环中调用)
+    pub fn refresh_selected_local_metadata(&mut self) {
+        if let Some(ref dir) = self.selected_local_dir {
+            self.local_device_code = crate::local::LocalScanner::read_local_device_code(dir);
+            self.local_accounts = crate::local::LocalScanner::read_local_accounts(dir);
+        } else {
+            self.local_device_code = None;
+            self.local_accounts.clear();
+        }
+    }
+
+    /// 确保指定作业已被全量解析 (用于本地试卷 Lazy Resolver 按需懒解析)
+    pub fn ensure_local_homework_parsed(&mut self, hw_id: &str) -> Option<&crate::models::HomeworkItem> {
+        if let Some(pos) = self.local_items.iter().position(|h| h.id == hw_id) {
+            if !self.local_items[pos].is_parsed() {
+                crate::local::LocalScanner::ensure_homework_parsed(&mut self.local_items[pos]);
+            }
+            return Some(&self.local_items[pos]);
+        }
+        None
+    }
+
     /// 异步上报功能调用统计 (后台线程无阻塞)
     pub fn report_feature_usage(&self, feature_key: &str) {
         let token_opt = self.la_session.as_ref().map(|s| s.access_token.clone())
@@ -231,156 +259,127 @@ impl AppState {
 
     #[inline(never)]
     fn evaluate_feature_permission(&self, feature_key: &str) -> crate::la_client::FeatureCheckResult {
-        crate::themida_tiger_white!({
-            // 0. 管理员特权直接放行所有功能 (role <= 1)
-            if self.la_session.as_ref().is_some_and(|s| s.user.role <= 1) {
-                return crate::la_client::FeatureCheckResult {
-                    allowed: true,
-                    reason: "管理员特权放行".to_string(),
-                    required_tier: "ultra".to_string(),
-                    requires_login: false,
-                    requires_membership: false,
-                };
-            }
-            let feature_opt = if self.features_loaded || !self.features.is_empty() {
-                self.features.get(feature_key)
-            } else {
-                None
+        let is_admin = self.la_session.as_ref().is_some_and(|s| s.user.role <= 1);
+        if is_admin {
+            return crate::la_client::FeatureCheckResult {
+                allowed: true,
+                reason: "管理员特权放行".to_string(),
+                required_tier: "ultra".to_string(),
+                requires_login: false,
+                requires_membership: false,
             };
+        }
 
-            if let Some(feat) = feature_opt {
-                // 1. 若 status != "enabled" -> allowed: false, reason: "该功能维护中"
-                if feat.status != "enabled" {
-                    let reason = feat
-                        .reason
-                        .as_deref()
-                        .filter(|s| !s.trim().is_empty())
-                        .unwrap_or("该功能维护中")
-                        .to_string();
-                    return crate::la_client::FeatureCheckResult {
-                        allowed: false,
-                        reason,
-                        required_tier: feat.min_member_tier.clone().unwrap_or_default(),
-                        requires_login: false,
-                        requires_membership: false,
-                    };
-                }
+        let is_logged_in = self.la_session.is_some();
+        let is_member = self.la_session.as_ref().map(|s| s.user.is_member()).unwrap_or(false);
+        let user_member_level = self.la_session.as_ref().map(|s| s.user.member_level).unwrap_or(0);
 
-                // 2. 若需要登录（requires_login || requires_membership）且用户未登录（self.la_session.is_none()）
-                let needs_login = feat.requires_login || feat.requires_membership;
-                if needs_login && self.la_session.is_none() {
-                    return crate::la_client::FeatureCheckResult {
-                        allowed: false,
-                        reason: "该功能需要登录后使用".to_string(),
-                        required_tier: feat.min_member_tier.clone().unwrap_or_default(),
-                        requires_login: true,
-                        requires_membership: feat.requires_membership,
-                    };
-                }
+        let feature_opt = if self.features_loaded || !self.features.is_empty() {
+            self.features.get(feature_key)
+        } else {
+            None
+        };
 
-                // 3. 若已登录
-                if let Some(session) = &self.la_session {
-                    // 若服务端返回了 authorized == Some(false)
-                    if feat.authorized == Some(false) {
-                        let reason = feat
-                            .deny_message
-                            .as_deref()
-                            .filter(|s| !s.trim().is_empty())
-                            .unwrap_or("该功能需要开通会员")
-                            .to_string();
-                        return crate::la_client::FeatureCheckResult {
-                            allowed: false,
-                            reason,
-                            required_tier: feat
-                                .min_member_tier
-                                .clone()
-                                .unwrap_or_else(|| "pro".to_string()),
-                            requires_login: false,
-                            requires_membership: true,
-                        };
-                    }
+        let (has_feat, is_enabled, req_login, req_membership, min_member_level, authorized_flag, feat_reason, feat_tier) = match feature_opt {
+            Some(feat) => {
+                let auth_flag: i8 = match feat.authorized {
+                    Some(true) => 1,
+                    Some(false) => -1,
+                    None => 0,
+                };
+                (
+                    true,
+                    feat.status == "enabled",
+                    feat.requires_login || feat.requires_membership,
+                    feat.requires_membership,
+                    feat.min_member_level,
+                    auth_flag,
+                    feat.reason.clone().or_else(|| feat.deny_message.clone()),
+                    feat.min_member_tier.clone().unwrap_or_default(),
+                )
+            }
+            None => (false, false, false, false, 0, 0, None, String::new()),
+        };
 
-                    // 若 requires_membership && user.member_level < min_member_level
-                    if feat.requires_membership
-                        && session.user.member_level < feat.min_member_level
-                        && feat.authorized != Some(true)
-                    {
-                        let default_tier = feat
-                            .min_member_tier
-                            .as_deref()
-                            .unwrap_or("Pro 会员");
-                        let reason = feat
-                            .deny_message
-                            .as_deref()
-                            .filter(|s| !s.trim().is_empty())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| format!("该功能需要开通 {default_tier} 或更高等级会员"));
-                        return crate::la_client::FeatureCheckResult {
-                            allowed: false,
-                            reason,
-                            required_tier: feat
-                                .min_member_tier
-                                .clone()
-                                .unwrap_or_else(|| "pro".to_string()),
-                            requires_login: false,
-                            requires_membership: true,
-                        };
-                    }
-                }
+        let is_default_free = matches!(feature_key, "answer_parser" | "cloud_mode" | "copy_export");
 
-                // 4. 否则放行
-                crate::la_client::FeatureCheckResult {
-                    allowed: true,
-                    reason: "已授权".to_string(),
-                    required_tier: String::new(),
-                    requires_login: false,
-                    requires_membership: false,
-                }
+        let decision_code: u8 = if has_feat {
+            if !is_enabled {
+                1
+            } else if req_login && !is_logged_in {
+                2
+            } else if authorized_flag == -1 || (req_membership && user_member_level < min_member_level && authorized_flag != 1) {
+                3
             } else {
-                // 离线或尚未加载 features：
-                // 安全默认值：answer_parser、cloud_mode、copy_export 允许免费无需登录；auto_complete 和 voice_clone 需要登录+会员。
-                match feature_key {
-                    "answer_parser" | "cloud_mode" | "copy_export" => {
-                        crate::la_client::FeatureCheckResult {
-                            allowed: true,
-                            reason: "离线安全放行".to_string(),
-                            required_tier: String::new(),
-                            requires_login: false,
-                            requires_membership: false,
-                        }
+                0
+            }
+        } else if is_default_free {
+            0
+        } else if !is_logged_in {
+            2
+        } else if !is_member {
+            3
+        } else {
+            0
+        };
+
+        match decision_code {
+            0 => crate::la_client::FeatureCheckResult {
+                allowed: true,
+                reason: if has_feat {
+                    "已授权".to_string()
+                } else if is_member {
+                    "会员特权放行".to_string()
+                } else {
+                    "离线安全放行".to_string()
+                },
+                required_tier: if !feat_tier.is_empty() { feat_tier } else { "pro".to_string() },
+                requires_login: false,
+                requires_membership: false,
+            },
+            1 => crate::la_client::FeatureCheckResult {
+                allowed: false,
+                reason: feat_reason.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "该功能维护中".to_string()),
+                required_tier: feat_tier,
+                requires_login: false,
+                requires_membership: false,
+            },
+            2 => crate::la_client::FeatureCheckResult {
+                allowed: false,
+                reason: "该功能需要登录后使用".to_string(),
+                required_tier: if !feat_tier.is_empty() { feat_tier } else { "pro".to_string() },
+                requires_login: true,
+                requires_membership: req_membership || !is_default_free,
+            },
+            3 => {
+                let default_tier = if !feat_tier.is_empty() {
+                    feat_tier.clone()
+                } else {
+                    "pro".to_string()
+                };
+                let reason = feat_reason.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
+                    if default_tier.eq_ignore_ascii_case("ultra") {
+                        "该功能需要开通 Ultra 会员后使用".to_string()
+                    } else {
+                        "该功能需要开通 Pro 会员后使用".to_string()
                     }
-                    _ => {
-                        if let Some(session) = &self.la_session {
-                            if session.user.is_member() {
-                                crate::la_client::FeatureCheckResult {
-                                    allowed: true,
-                                    reason: "会员特权放行".to_string(),
-                                    required_tier: "pro".to_string(),
-                                    requires_login: false,
-                                    requires_membership: false,
-                                }
-                            } else {
-                                crate::la_client::FeatureCheckResult {
-                                    allowed: false,
-                                    reason: "该功能需要开通会员".to_string(),
-                                    required_tier: "pro".to_string(),
-                                    requires_login: false,
-                                    requires_membership: true,
-                                }
-                            }
-                        } else {
-                            crate::la_client::FeatureCheckResult {
-                                allowed: false,
-                                reason: "该功能需要登录后使用".to_string(),
-                                required_tier: "pro".to_string(),
-                                requires_login: true,
-                                requires_membership: true,
-                            }
-                        }
-                    }
+                });
+                crate::la_client::FeatureCheckResult {
+                    allowed: false,
+                    reason,
+                    required_tier: default_tier,
+                    requires_login: false,
+                    requires_membership: true,
                 }
             }
-        })
+            _ => crate::la_client::FeatureCheckResult {
+                allowed: false,
+                reason: "权限校验未通过".to_string(),
+                required_tier: feat_tier,
+                requires_login: false,
+                requires_membership: false,
+            },
+        }
     }
 
     /// 触发权限拦截模态弹窗

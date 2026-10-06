@@ -13,6 +13,13 @@ use crate::utils::exporter::Exporter;
 use crate::views::{accent_action_btn, action_btn, choice_btn, responsive_flow, subtle_action_btn};
 
 pub fn render(ui: &mut FluentUi, state: &mut AppState) {
+    // 若当前作业为懒索引状态，按需触发全量解析
+    if let Some(ref mut h) = state.selected_homework {
+        if !h.is_parsed() {
+            crate::local::LocalScanner::ensure_homework_parsed(h);
+        }
+    }
+
     let hw = match &state.selected_homework {
         Some(h) => h.clone(),
         None => {

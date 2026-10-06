@@ -109,11 +109,12 @@ impl FepcApp {
                 state.homework_items = hw_list;
             }
 
-        // 自动发现本地 ETS 客户端目录
+        // 自动发现本地 ETS 客户端目录 (极速 Lazy 懒扫描 + 首次单次读取元数据)
         state.local_ets_dirs = LocalScanner::find_ets_local_dirs();
-        if let Some(first) = state.local_ets_dirs.first() {
+        if let Some(first) = state.local_ets_dirs.first().cloned() {
             state.selected_local_dir = Some(first.clone());
-            state.local_items = LocalScanner::scan_homeworks(first);
+            state.refresh_selected_local_metadata();
+            state.local_items = LocalScanner::scan_homeworks_lazy(&first);
         }
 
         let mut selected_nav_index = 0;
