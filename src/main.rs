@@ -50,6 +50,10 @@ unsafe extern "system" fn win7_delay_hook(
 #[unsafe(no_mangle)]
 pub static mut __pfnDliNotifyHook2: unsafe extern "system" fn(u32, *const DelayLoadInfo) -> *mut std::ffi::c_void = win7_delay_hook;
 
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub static mut __pfnDliFailureHook2: unsafe extern "system" fn(u32, *const DelayLoadInfo) -> *mut std::ffi::c_void = win7_delay_hook;
+
 
 fn main() -> eframe::Result {
     fepc::telemetry::install_panic_hook();

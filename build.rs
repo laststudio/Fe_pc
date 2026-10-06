@@ -8,6 +8,7 @@ fn main() {
     println!("cargo:rustc-link-search=native={}\\lib", manifest_dir);
     println!("cargo:rustc-link-lib=dylib=SecureEngineSDK64");
     println!("cargo:rustc-link-lib=delayimp");
+    println!("cargo:rustc-link-arg=/DELAYLOAD:combase.dll");
 
     let mut res = winres::WindowsResource::new();
     res.set_icon("icon.ico");
