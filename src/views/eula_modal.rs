@@ -141,7 +141,7 @@ pub fn render_eula_modal(ctx: &egui::Context, state: &mut AppState) {
                                     ui.add_space(2.0);
                                     ui.label(
                                         RichText::new(
-                                            "本软件为个人原创闭源软件制品（非商业软件，未申请软著登记，作者保留原创版权）。\n\
+                                            "本软件为原创闭源软件制品（未申请软著登记，作者保留全部原创版权与未来权益）。\n\
                                             严禁用于考试作弊、违规代写或规避教学监管！因违规使用导致的成绩作废与处分风险由用户全权自负。"
                                         )
                                         .size(11.5)
