@@ -16,6 +16,11 @@ pub struct CloudClient;
 
 impl CloudClient {
     pub fn session_file_path() -> PathBuf {
+        if let Ok(p) = std::env::var("FEPC_SESSION_FILE") {
+            if !p.trim().is_empty() {
+                return PathBuf::from(p.trim());
+            }
+        }
         if let Ok(app_data) = std::env::var("APPDATA") {
             let dir = PathBuf::from(app_data).join("fepc");
             let _ = fs::create_dir_all(&dir);

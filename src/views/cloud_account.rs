@@ -708,26 +708,38 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
             ui.label(format!("🆔 家长/学生关联 ID: {}", state.session.parent_account_id));
             ui.label(RichText::new("✔ 会话令牌有效").color(Color32::from_rgb(76, 175, 80)));
 
-            // 若当前会话匹配本地账号，展示学校班级和学生卡信息
+            // 若当前会话匹配本地账号，且存在档案信息，展示学校班级和学生卡信息
             if let Some(acc) = state.ets_local_accounts.iter().find(|a| {
                 a.account == state.session.phone
                     || (!a.token.is_empty() && a.token == state.session.token)
             }) {
-                ui.add_space(4.0);
-                ui.separator();
-                ui.add_space(4.0);
-                ui.label(RichText::new("💾 关联本地 ETS 档案:").strong().color(Color32::from_rgb(0, 180, 255)));
-                if !acc.student_card_no.is_empty() {
-                    ui.label(format!("💳 学生卡号: {}", acc.student_card_no));
-                }
-                if !acc.school_name.is_empty() || !acc.class_name.is_empty() {
-                    ui.label(format!("🏫 就读学校: {} · {}班", acc.school_name, acc.class_name));
-                }
-                if !acc.teacher_name.is_empty() {
-                    ui.label(format!("👨‍🏫 任课老师: {}", acc.teacher_name));
-                }
-                if !acc.expiry_time.is_empty() {
-                    ui.label(format!("📅 有效期至: {}", acc.expiry_time));
+                let has_archive_info = !acc.student_card_no.is_empty()
+                    || !acc.school_name.is_empty()
+                    || !acc.class_name.is_empty()
+                    || !acc.teacher_name.is_empty()
+                    || !acc.expiry_time.is_empty();
+
+                if has_archive_info {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("💾 关联本地 ETS 档案:").strong().color(Color32::from_rgb(0, 180, 255)));
+                    if !acc.student_card_no.is_empty() {
+                        ui.label(format!("💳 学生卡号: {}", acc.student_card_no));
+                    }
+                    if !acc.school_name.is_empty() && !acc.class_name.is_empty() {
+                        ui.label(format!("🏫 就读学校: {} · {}班", acc.school_name, acc.class_name));
+                    } else if !acc.school_name.is_empty() {
+                        ui.label(format!("🏫 就读学校: {}", acc.school_name));
+                    } else if !acc.class_name.is_empty() {
+                        ui.label(format!("🏫 班级: {}班", acc.class_name));
+                    }
+                    if !acc.teacher_name.is_empty() {
+                        ui.label(format!("👨‍🏫 任课老师: {}", acc.teacher_name));
+                    }
+                    if !acc.expiry_time.is_empty() {
+                        ui.label(format!("📅 有效期至: {}", acc.expiry_time));
+                    }
                 }
             }
 

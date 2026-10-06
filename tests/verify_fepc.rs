@@ -483,6 +483,9 @@ fn test_real_la_login() {
         Err(e) => panic!("Real login should succeed or fail with known server quota error, got: {e}"),
     };
 
+    let temp_la = std::env::temp_dir().join(format!("fepc_test_la_{}.json", uuid::Uuid::new_v4()));
+    unsafe { std::env::set_var("FEPC_LA_SESSION_FILE", temp_la.to_string_lossy().to_string()); }
+
     // Now test UI render with this session
     let ctx = eframe::egui::Context::default();
     let mut state = AppState {
@@ -497,6 +500,8 @@ fn test_real_la_login() {
     });
     println!("cloud_account render with real session succeeded!");
     LaClient::clear_session();
+    unsafe { std::env::remove_var("FEPC_LA_SESSION_FILE"); }
+    let _ = std::fs::remove_file(&temp_la);
 }
 
 #[test]
@@ -2214,7 +2219,10 @@ fn test_ets_local_db_ui_and_state_machine() {
     assert_eq!(state.session.phone, "13912345678");
     assert_eq!(state.login_password, "mypassword888");
 
-    // 4. 测试免密直接接管 (零顶号)
+    // 4. 测试免密直接接管 (零顶号) - 严格隔离测试文件，绝不污染用户真实 APPDATA 会话
+    let temp_session = std::env::temp_dir().join(format!("fepc_test_session_{}.json", uuid::Uuid::new_v4()));
+    unsafe { std::env::set_var("FEPC_SESSION_FILE", temp_session.to_string_lossy().to_string()); }
+
     let res = state.apply_ets_local_direct_session(0);
     assert!(res.is_ok());
     assert!(state.session.is_logged_in);
@@ -2231,6 +2239,9 @@ fn test_ets_local_db_ui_and_state_machine() {
             fepc::views::cloud_account::render(&mut fluent, &mut state);
         });
     });
+
+    unsafe { std::env::remove_var("FEPC_SESSION_FILE"); }
+    let _ = std::fs::remove_file(&temp_session);
 
     println!("✓ 本地 ETS.db 账号状态机与 UI 联动集成测试全部通过！");
 }

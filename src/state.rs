@@ -1156,7 +1156,10 @@ mod tests {
         assert_eq!(state.login_password, "plain_pass_123");
         assert!(state.notification.as_ref().unwrap().0.contains("已自动填入账号与解密密码"));
 
-        // 测试免密零顶号直接接管
+        // 测试免密零顶号直接接管 (使用临时文件隔离，严禁污染真实 APPDATA)
+        let temp_session = std::env::temp_dir().join(format!("fepc_test_session_{}.json", uuid::Uuid::new_v4()));
+        unsafe { std::env::set_var("FEPC_SESSION_FILE", temp_session.to_string_lossy().to_string()); }
+
         let res = state.apply_ets_local_direct_session(0);
         assert!(res.is_ok());
         assert!(state.session.is_logged_in);
@@ -1172,6 +1175,9 @@ mod tests {
 
         // 测试索引越界
         assert!(state.apply_ets_local_direct_session(99).is_err());
+
+        unsafe { std::env::remove_var("FEPC_SESSION_FILE"); }
+        let _ = std::fs::remove_file(&temp_session);
 
         // 测试不存在路径扫描
         state.ets_local_db_path = Some("non_existent_ets_xyz.db".to_string());

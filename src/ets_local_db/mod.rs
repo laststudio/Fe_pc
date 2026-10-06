@@ -308,30 +308,20 @@ pub fn read_local_accounts(db_path: &Path) -> Result<Vec<EtsLocalAccount>, Strin
             ..Default::default()
         };
 
-        // 匹配关联的学生卡与学籍信息
-        if let Some(res) = res_map.get(&cur_res) {
-            acc.student_card_no = res.1.clone();
-            acc.student_card_pwd = res.2.clone();
-            if acc.name.is_empty() {
-                acc.name = res.3.clone();
+        // 匹配关联的学生卡与学籍信息 (严格通过 CurResItemID 关联，未匹配绝不臆造或随意跨账号挪用)
+        if !cur_res.trim().is_empty() {
+            if let Some(res) = res_map.get(&cur_res) {
+                acc.student_card_no = res.1.clone();
+                acc.student_card_pwd = res.2.clone();
+                if acc.name.is_empty() {
+                    acc.name = res.3.clone();
+                }
+                acc.school_name = res.4.clone();
+                acc.class_name = res.5.clone();
+                acc.teacher_name = res.6.clone();
+                acc.expiry_time = res.7.clone();
+                acc.grade_name = res.8.clone();
             }
-            acc.school_name = res.4.clone();
-            acc.class_name = res.5.clone();
-            acc.teacher_name = res.6.clone();
-            acc.expiry_time = res.7.clone();
-            acc.grade_name = res.8.clone();
-        } else if let Some((_, first_res)) = res_map.iter().next() {
-            // 回退取第一个
-            acc.student_card_no = first_res.1.clone();
-            acc.student_card_pwd = first_res.2.clone();
-            if acc.name.is_empty() {
-                acc.name = first_res.3.clone();
-            }
-            acc.school_name = first_res.4.clone();
-            acc.class_name = first_res.5.clone();
-            acc.teacher_name = first_res.6.clone();
-            acc.expiry_time = first_res.7.clone();
-            acc.grade_name = first_res.8.clone();
         }
 
         accounts.push(acc);
@@ -750,7 +740,24 @@ mod tests {
             let accounts = read_local_accounts(&path).expect("读取 ETS.db 账号失败");
             assert!(!accounts.is_empty(), "账号列表不应为空");
             for a in &accounts {
-                println!("Account: {} ({}) -> plain pwd: {:?}", a.account, a.name, a.password_plain);
+                println!("Account: {} ({}) -> card: '{}', school: '{}'", a.account, a.name, a.student_card_no, a.school_name);
+            }
+
+            // 严格断言：未在 ResourceList 绑定学生卡的账号，卡号与学校必须为空，绝不能挪用他人学生卡
+            if let Some(tang) = accounts.iter().find(|a| a.account.contains("1500000100220922169")) {
+                assert!(tang.student_card_no.is_empty(), "唐浩泽未绑定当前学生卡，卡号必须为空！");
+                assert!(tang.school_name.is_empty(), "唐浩泽学校信息必须为空！");
+            }
+            if let Some(lastudio) = accounts.iter().find(|a| a.account.contains("18518811167")) {
+                assert!(lastudio.student_card_no.is_empty(), "lastudio 未绑定当前学生卡，卡号必须为空！");
+            }
+            if let Some(ruban) = accounts.iter().find(|a| a.account.contains("13377673189")) {
+                assert!(ruban.student_card_no.is_empty(), "鲁班奖未绑定当前学生卡，卡号必须为空！");
+            }
+            // 真实命中 272200541 的账号必须包含正确的学生卡信息
+            if let Some(lei) = accounts.iter().find(|a| a.account == "13552295672") {
+                assert_eq!(lei.student_card_no, "BJ170163553G");
+                assert_eq!(lei.school_name, "北京市十一学校顺义学校");
             }
 
             // 测试客观题答案查询 (PaperID = 1)
