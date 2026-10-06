@@ -18,19 +18,6 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         if !h.is_parsed() {
             crate::local::LocalScanner::ensure_homework_parsed(h);
         }
-        // 若从云端或本地试卷包未获取到答案，自动调用 ets_local_db 检索匹配
-        let needs_answers = !h.is_parsed() || h.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty()));
-        if needs_answers {
-            if let Some(db_path) = crate::ets_local_db::detect_db_path() {
-                let matched = h.id.parse::<i64>().ok()
-                    .and_then(|pid| crate::ets_local_db::query_paper_all_answers(&db_path, pid))
-                    .or_else(|| crate::ets_local_db::match_paper_answers(&db_path, &h.id, &h.name, &h.resource_id));
-                if let Some(local_ans) = matched {
-                    local_ans.apply_to_homework(h);
-                    state.local_ets_answer_matched = true;
-                }
-            }
-        }
     }
 
     let hw = match &state.selected_homework {
@@ -53,7 +40,6 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     // 头部导航栏
     responsive_flow(ui, |ui| {
         if action_btn(ui, "⬅ 返回列表").clicked() {
-            state.local_ets_answer_matched = false;
             state.selected_homework = None;
             state.current_tab = NavTab::HomeworkList;
         }
@@ -81,37 +67,6 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
             let is_concise = state.answer_view_mode == AnswerViewMode::Concise;
             if choice_btn(ui, "⚡ 极简速查", is_concise, accent).clicked() {
                 state.answer_view_mode = AnswerViewMode::Concise;
-            }
-
-            if action_btn(ui, "🔍 尝试本地极速匹配答案").clicked() {
-                state.report_feature_usage("answer_parser");
-                if let Some(db_path) = crate::ets_local_db::detect_db_path() {
-                    let matched = hw.id.parse::<i64>().ok()
-                        .and_then(|pid| crate::ets_local_db::query_paper_all_answers(&db_path, pid))
-                        .or_else(|| crate::ets_local_db::match_paper_answers(&db_path, &hw.id, &hw.name, &hw.resource_id));
-                    if let Some(local_ans) = matched {
-                        let c_count = local_ans.choices.len();
-                        let b_count = local_ans.blanks.len();
-                        let mut updated_hw = hw.clone();
-                        local_ans.apply_to_homework(&mut updated_hw);
-                        state.selected_homework = Some(updated_hw);
-                        state.local_ets_answer_matched = true;
-                        state.notification = Some((
-                            format!("⚡ 已命中本地 e听说 极速答案库（匹配到 {} 道选择题 / {} 道填空题，0ms 秒出）", c_count, b_count),
-                            InfoBarKind::Success,
-                        ));
-                    } else {
-                        state.notification = Some((
-                            "本地 ETS.db 中未检索到与当前试卷匹配的客观题或填空题缓存答案".to_string(),
-                            InfoBarKind::Informational,
-                        ));
-                    }
-                } else {
-                    state.notification = Some((
-                        "未在系统中检测到有效的本地 ETS.db 数据库文件".to_string(),
-                        InfoBarKind::Warning,
-                    ));
-                }
             }
 
             let copy_check = state.check_feature("copy_export");
@@ -174,30 +129,13 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     ui.add_space(12.0);
 
-    // 若命中本地 e听说 极速答案库，在答案列表顶部醒目标注
-    let is_local_hit = state.local_ets_answer_matched
-        || hw.sections.iter().any(|s| s.title.contains("极速答案库"));
-    if is_local_hit {
-        ui.card(
-            "⚡ 已命中本地 e听说 极速答案库（客观题与填空题 0ms 秒出）",
-            "已自动从本地 ETS.db 提取客观选择题与读写填空题答案，0ms 无等待秒出",
-            |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("⚡ 本地极速答案库直出:").strong().color(Color32::from_rgb(255, 200, 0)));
-                    ui.label(RichText::new("已自动匹配本地选择题与填空题，答案已填入下方表格供核对！").color(Color32::from_rgb(100, 220, 255)));
-                });
-            },
-        );
-        ui.add_space(8.0);
-    }
-
     // 题目与答案内容自然排版
     match state.answer_view_mode {
         AnswerViewMode::Concise => {
             ui.card("极简答案速查清单", "标准答案精炼提取，便于核对或快速记录", |ui| {
                 let concise_list = hw.get_concise_answers();
                 if concise_list.is_empty() {
-                    ui.label("当前试卷暂未获取到答案。您可以点击上方【🔍 尝试本地极速匹配答案】尝试从本地 ETS.db 读取。");
+                    ui.label("当前试卷暂未获取到答案。请确保已连接云端试卷或通过本地扫描导入试卷包。");
                 } else {
                     for (idx_label, ans) in concise_list {
                         ui.horizontal_wrapped(|ui| {
@@ -213,7 +151,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         AnswerViewMode::Detailed => {
             if hw.sections.is_empty() {
                 ui.card("暂无题目与答案", "当前试卷尚未解析出题目与答案", |ui| {
-                    ui.label("您可以点击上方【🔍 尝试本地极速匹配答案】尝试从本地 ETS.db 读取客观题与填空题答案。");
+                    ui.label("请通过云端或本地试卷包扫描解析题目与答案。");
                 });
             } else {
                 for section in &hw.sections {

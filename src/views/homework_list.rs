@@ -330,7 +330,6 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     state.report_feature_usage("answer_parser");
                     let mut hw_to_select = hw.clone();
                     state.answer_view_mode = AnswerViewMode::Detailed;
-                    state.local_ets_answer_matched = false;
                     // 如果是云端作业且未下载解析，触发下载 / 回退解析
                     if is_cloud && !hw_to_select.is_parsed() {
                         match CloudClient::download_and_parse_homework(&state.session, hw) {
@@ -342,20 +341,6 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                             }
                         }
                     }
-                    // 若未解析出题目或题目答案为空，自动尝试本地 ETS.db 秒速匹配
-                    let needs_local = !hw_to_select.is_parsed() || hw_to_select.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty()));
-                    if needs_local {
-                        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
-                            if let Some(local_ans) = crate::ets_local_db::match_paper_answers(&db_path, &hw_to_select.id, &hw_to_select.name, &hw_to_select.resource_id) {
-                                local_ans.apply_to_homework(&mut hw_to_select);
-                                state.local_ets_answer_matched = true;
-                                state.notification = Some((
-                                    "⚡ 已命中本地 e听说 极速答案库（客观题与填空题 0ms 秒出）".to_string(),
-                                    InfoBarKind::Success,
-                                ));
-                            }
-                        }
-                    }
                     state.selected_homework = Some(hw_to_select);
                 }
 
@@ -363,24 +348,10 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
                     state.report_feature_usage("answer_parser");
                     let mut hw_to_select = hw.clone();
                     state.answer_view_mode = AnswerViewMode::Concise;
-                    state.local_ets_answer_matched = false;
                     if is_cloud && !hw_to_select.is_parsed()
                         && let Ok(parsed_hw) = CloudClient::download_and_parse_homework(&state.session, hw) {
                             hw_to_select = parsed_hw;
                         }
-                    let needs_local = !hw_to_select.is_parsed() || hw_to_select.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty()));
-                    if needs_local {
-                        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
-                            if let Some(local_ans) = crate::ets_local_db::match_paper_answers(&db_path, &hw_to_select.id, &hw_to_select.name, &hw_to_select.resource_id) {
-                                local_ans.apply_to_homework(&mut hw_to_select);
-                                state.local_ets_answer_matched = true;
-                                state.notification = Some((
-                                    "⚡ 已命中本地 e听说 极速答案库（客观题与填空题 0ms 秒出）".to_string(),
-                                    InfoBarKind::Success,
-                                ));
-                            }
-                        }
-                    }
                     state.selected_homework = Some(hw_to_select);
                 }
 
@@ -391,18 +362,11 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
                 if subtle_action_btn(ui, "📋 复制全部答案").clicked() {
                     state.report_feature_usage("copy_export");
-                    let mut hw_to_copy = if is_cloud && !hw.is_parsed() {
+                    let hw_to_copy = if is_cloud && !hw.is_parsed() {
                         CloudClient::download_and_parse_homework(&state.session, hw).unwrap_or_else(|_| hw.clone())
                     } else {
                         hw.clone()
                     };
-                    if !hw_to_copy.is_parsed() || hw_to_copy.sections.iter().all(|s| s.questions.iter().all(|q| q.answers.is_empty())) {
-                        if let Some(db_path) = crate::ets_local_db::detect_db_path() {
-                            if let Some(local_ans) = crate::ets_local_db::match_paper_answers(&db_path, &hw_to_copy.id, &hw_to_copy.name, &hw_to_copy.resource_id) {
-                                local_ans.apply_to_homework(&mut hw_to_copy);
-                            }
-                        }
-                    }
                     let text = Exporter::format_concise_answers(&hw_to_copy);
                     if Exporter::copy_text_to_clipboard(&text).is_ok() {
                         state.notification = Some(("已复制极简答案到剪贴板".to_string(), InfoBarKind::Success));

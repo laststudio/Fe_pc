@@ -104,7 +104,6 @@ pub struct AppState {
     pub ets_local_accounts: Vec<crate::ets_local_db::EtsLocalAccount>,
     pub ets_local_scanning: bool,
     pub ets_local_scanned: bool,
-    pub local_ets_answer_matched: bool,
 
     // 跨线程安全通信信道 (动态随机校验掩码与防篡改防护)
     pub async_worker_tx: std::sync::mpsc::Sender<SecureWorkerMessage>,
@@ -218,7 +217,6 @@ impl Default for AppState {
             ets_local_accounts: Vec::new(),
             ets_local_scanning: false,
             ets_local_scanned: false,
-            local_ets_answer_matched: false,
             async_worker_tx,
             async_worker_rx,
             theme_config: ThemeConfig::new(FluentTheme::Dark).with_animations(true).with_material_opacity(1.0),
