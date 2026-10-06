@@ -74,7 +74,7 @@ pub fn render_eula_modal(ctx: &egui::Context, state: &mut AppState) {
                                     .color(if is_dark { Color32::WHITE } else { Color32::BLACK })
                             );
                             ui.label(
-                                RichText::new("商业专有软件许可 (EULA) · 隐私政策 · 服务与安全免责声明")
+                                RichText::new("原创闭源软件许可 (EULA) · 原创版权声明 · 隐私政策 · 服务与安全免责声明")
                                     .size(11.5)
                                     .color(Color32::from_gray(150))
                             );
@@ -141,7 +141,7 @@ pub fn render_eula_modal(ctx: &egui::Context, state: &mut AppState) {
                                     ui.add_space(2.0);
                                     ui.label(
                                         RichText::new(
-                                            "本软件为商业专有软件体系（历史开源协议已彻底废除）。\n\
+                                            "本软件为个人原创闭源软件制品（非商业软件，未申请软著登记，作者保留原创版权）。\n\
                                             严禁用于考试作弊、违规代写或规避教学监管！因违规使用导致的成绩作废与处分风险由用户全权自负。"
                                         )
                                         .size(11.5)
@@ -234,7 +234,7 @@ pub fn render_eula_modal(ctx: &egui::Context, state: &mut AppState) {
                     // 3. 底部同意勾选与操作按钮栏
                     if is_first_launch {
                         // 首次启动：复选框必须勾选
-                        let checkbox_text = "我已完整阅读并自愿同意《专有软件商业许可 (EULA)》、《第三方凭据隐私授权》与《服务与安全免责声明》，自愿承担使用风险并承诺合规使用。";
+                        let checkbox_text = "我已完整阅读并自愿同意《原创闭源软件许可 (EULA)》、《原创版权声明》、《第三方凭据隐私授权》与《服务与安全免责声明》，自愿承担使用风险并承诺合规使用。";
                         let cb = egui::Checkbox::new(
                             &mut state.eula_checkbox_checked,
                             RichText::new(checkbox_text).size(12.0).color(if is_dark { Color32::WHITE } else { Color32::BLACK })

@@ -746,6 +746,17 @@ fn render_ets_direct_tab(ui: &mut FluentUi, state: &mut AppState) {
                     return;
                 }
 
+                // 检查云端直连模式门控规则
+                let check = state.check_feature("cloud_mode");
+                if !check.allowed {
+                    state.trigger_auth_gate_modal("cloud_mode", "云端直连模式");
+                    return;
+                }
+
+                if let Some(la_sess) = state.la_session.as_ref() {
+                    crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+                }
+
                 match CloudClient::login(phone, &state.login_password, dev_code) {
                     Ok(sess) => {
                         state.session = sess;

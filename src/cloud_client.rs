@@ -70,6 +70,10 @@ impl CloudClient {
 
     /// 执行官方 ETS100 云端登录
     pub fn login(phone: &str, password: &str, device_code: &str) -> Result<UserSession, String> {
+        if let Some(la_sess) = crate::la_client::LaClient::load_saved_session() {
+            crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+        }
+
         let res = cloud::cloud::cloud_login_json(phone, password, device_code);
         if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
             let result = res.get("result").ok_or("未返回结果数据")?;
@@ -127,6 +131,10 @@ impl CloudClient {
 
     /// 验证码换绑并登录
     pub fn bind_device(phone: &str, password: &str, device_code: &str, code: &str) -> Result<UserSession, String> {
+        if let Some(la_sess) = crate::la_client::LaClient::load_saved_session() {
+            crate::la_client::sync_auth_to_resolver(&la_sess.access_token);
+        }
+
         let res = cloud::cloud::cloud_bind_device_json(phone, password, device_code, code);
         if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
             let result = res.get("result").ok_or("换绑未返回结果")?;

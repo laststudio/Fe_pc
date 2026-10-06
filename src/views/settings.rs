@@ -528,7 +528,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         ui.separator();
 
         ui.label("👤 开发者: code-leitianshuo (leitianshuo1337)");
-        ui.label(RichText::new("🏷 软件性质: 专有商业软件 (非开源 / 保留所有权利)").color(Color32::from_rgb(255, 179, 0)));
+        ui.label(RichText::new("🏷 软件性质: 原创闭源软件制品 (非商用 · 作者保留版权)").color(Color32::from_rgb(255, 179, 0)));
         ui.label(RichText::new("⚠️ 免责声明: 本软件仅供学习交流使用，请勿用于考试作弊等违规用途。").color(Color32::from_gray(160)));
 
         ui.add_space(4.0);

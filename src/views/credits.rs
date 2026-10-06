@@ -12,15 +12,15 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
     );
 
     // 软件许可与服务协议 (EULA) 专区
-    ui.card("软件许可与服务协议 (EULA)", "专有商业软件许可 · 隐私政策 · 服务与安全免责声明", |ui| {
+    ui.card("软件许可与服务协议 (EULA)", "原创闭源许可 · 原创版权声明 · 隐私政策 · 服务免责声明", |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Fe PC 最终用户许可协议与免责声明").strong().size(14.0));
-            ui.label(RichText::new("(版本: 2026-10-05)").color(Color32::from_gray(140)).size(12.0));
+            ui.label(RichText::new("Fe PC 最终用户使用许可协议（EULA）与免责声明").strong().size(14.0));
+            ui.label(RichText::new("(版本: 2026-10-06)").color(Color32::from_gray(140)).size(12.0));
         });
         ui.add_space(2.0);
         ui.label(
-            RichText::new("本软件为商业专有软件体系，受《中华人民共和国著作权法》与国际版权公约严格保护。\n\
-            点击下方按钮可随时查阅完整的专有商业软件许可、第三方凭据隐私授权与服务免责声明。")
+            RichText::new("本软件为个人原创闭源软件制品（非商业机构运营，未申请软著登记，原创版权归作者所有）。\n\
+            点击下方按钮可随时查阅完整的原创闭源许可、原创版权声明、第三方凭据隐私授权与服务免责声明。")
                 .color(Color32::from_gray(180))
                 .size(12.5),
         );
@@ -38,7 +38,7 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
         ui.label(
             RichText::new(
                 "Fe PC (Fuck ets100 Desktop) 是一款专为学生听力口语训练与复习设计的高效桌面辅助工具。\n\
-                软件本身由 code-leitianshuo (leitianshuo1337) 独立开发并持有版权。\n\
+                软件本身由 code-leitianshuo (leitianshuo1337) 独立开发并持有原创版权。\n\
                 在构建过程中，我们深度使用了 Rust 语言生态中众多杰出的第三方开源项目与平台服务。\n\
                 我们由衷感谢这些开源项目的作者、维护者和社区贡献者！",
             )
@@ -219,8 +219,8 @@ pub fn render(ui: &mut FluentUi, state: &mut AppState) {
 
     ui.card("开发者与软件版权信息", "关于开发者与使用规范", |ui| {
         ui.label(RichText::new("开发者: code-leitianshuo (leitianshuo1337)").strong().size(15.0));
-        ui.label(RichText::new("软件性质: 专有软件 (Proprietary / Closed Source) · 保留所有权利").color(Color32::from_rgb(255, 179, 0)));
-        ui.label("本软件所有代码与设计由作者独立开发，不采用开源协议发布，未经授权请勿逆向或二次分发。");
+        ui.label(RichText::new("软件性质: 原创闭源软件制品 (Closed Source / 非商用) · 原创版权归作者所有").color(Color32::from_rgb(255, 179, 0)));
+        ui.label("本软件全部原创代码与设计由作者独立开发，未申请软著登记，目前完全闭源且非商用，未经授权严禁逆向或二次倒卖分发。");
         ui.add_space(6.0);
         responsive_flow(ui, |ui| {
             if action_btn(ui, "📄 查看用户协议与服务免责声明 (EULA)").clicked() {
