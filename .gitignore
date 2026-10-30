@@ -8,3 +8,5 @@ tools/Themida
 *.dmp
 *.log
 win7_dist/
+*.exe
+*.dll
